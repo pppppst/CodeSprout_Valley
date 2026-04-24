@@ -81,11 +81,19 @@ code {
 }
 
 .actions {
+  /* 核心：自由定位 */
+  position: absolute;
+  /* 👇 改这4个数字，控制按钮位置 */
+  top: 20px;
+  right: 20px;
+  left: auto; /* 删掉left，加right */
+  transform: none;
+
+  /* 保留按钮原有样式，不用动 */
   display: flex;
   padding-top: 32px;
   margin: -6px;
   flex-wrap: wrap;
-  justify-content: flex-start;
 }
 
 .action {
