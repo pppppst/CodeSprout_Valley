@@ -180,9 +180,13 @@ const activeGridCount = computed(() => {
 .stat-detail p {
   margin: 10px 0 0 0;
   font-size: 14px;
-  color: #ddd;
+  color: #000000;
 }
 
+.stat-item span{
+  color: #000000;
+  font-size: 14px;
+}
 /* 状态栏样式（青黛国风） */
 .status-bar {
   margin-top: 30px;
