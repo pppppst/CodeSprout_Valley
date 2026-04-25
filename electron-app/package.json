@@ -1,0 +1,11 @@
+{
+  "name": "electron-app",
+  "version": "1.0.0",
+  "scripts": {
+    "test": "vitest"
+  },
+  "description": "CodeSprout Valley Desktop Client",
+  "devDependencies": {
+    "vitest": "^4.1.5"
+  }
+}
