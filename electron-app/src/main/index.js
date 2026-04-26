@@ -3,11 +3,14 @@ import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 
+const DESIGN_WIDTH = 1365
+const DESIGN_HEIGHT = 768
+
 // 【关键修改 1】：把创建窗口的所有代码，包裹在 createWindow 函数里！
 function createWindow() {
   const mainWindow = new BrowserWindow({
-    width: 1440,
-    height: 810,
+    width: DESIGN_WIDTH,
+    height: DESIGN_HEIGHT,
     show: false,
     autoHideMenuBar: true,
     transparent: false, // 不允许背景透明
@@ -19,6 +22,9 @@ function createWindow() {
       sandbox: false
     }
   })
+
+  // Lock resizing to the original UI ratio.
+  mainWindow.setAspectRatio(DESIGN_WIDTH / DESIGN_HEIGHT)
 
   mainWindow.on('ready-to-show', () => {
     mainWindow.show()
