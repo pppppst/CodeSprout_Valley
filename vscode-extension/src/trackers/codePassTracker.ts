@@ -1,17 +1,18 @@
-// src/trackers/codePassTracker.ts
+
 import * as vscode from 'vscode';
 import { reportActivityToElectron } from '../reportService';
 import { ActivityReportData, FilePassStateMap } from '../types'; // 引入 FilePassStateMap
 import { isErrorSeverity } from '../utils/errorUtils';
 
-let codePassedCount = 0;
+let codePassedIncrementInSession = 0; // 新增：当前会话中，自上次上报后的通过增量
 const filePassState: FilePassStateMap = new Map(); // 使用 FilePassStateMap
 let reportThrottleTimeout: NodeJS.Timeout | undefined;
 const REPORT_THROTTLE_MS = 5000; // 报告上报的节流阈值
 const PASS_COUNT_THROTTLE_MS = 5000; // 计数通过事件的节流阈值
 
+
 /**
- * 处理诊断变化，更新 codePassedCount。
+ * 处理诊断变化，更新 codePassedIncrementInSession。
  * 此函数由 ErrorReporterTracker 的 onDiagnosticsChanged 函数调用。
  * @param uri 发生诊断变化的文件的 URI。
  */
@@ -24,19 +25,15 @@ export function handleDiagnosticChangeForCodePass(uri: vscode.Uri) {
 
     // 场景1：文件当前没有 Error
     if (isErrorFreeNow) {
-        // 判断是否满足“通过”的计数条件：
-        // 1. prevFileState === -1: 文件之前有 Error，现在修复了 => “通过修改问题通过”
-        // 2. prevFileState === 0: 文件从未计数过通过，且当前无 Error => “直接通过 / 首次通过”
         const canCountThisPass = (prevFileState === -1) || (prevFileState === 0);
 
         if (canCountThisPass) {
             const now = Date.now();
-            // 提取上次计数时间，用于节流。如果 prevFileState 是 0 或 -1，则 lastCountedTime 为 0。
             const lastCountedTime = (prevFileState > 0) ? prevFileState : 0;
             
             if (now - lastCountedTime > PASS_COUNT_THROTTLE_MS) {
-                codePassedCount++;
-                console.log(`CS Valley Plugin: File ${uri.fsPath} passed. codePassedCount: ${codePassedCount}`);
+                codePassedIncrementInSession++; // 累加到增量计数器
+                console.log(`CS Valley Plugin: File ${uri.fsPath} passed. New codePassed increment in session: ${codePassedIncrementInSession}`);
                 // 记录本次通过的时间戳，标记为【已稳定通过，且当前无错】
                 filePassState.set(uriStr, now);
                 triggerReportCodePass(); // 触发上报
@@ -54,25 +51,31 @@ function triggerReportCodePass() {
         clearTimeout(reportThrottleTimeout);
     }
     reportThrottleTimeout = setTimeout(() => {
-        reportActivityToElectron({ codePassed: codePassedCount });
+        if (codePassedIncrementInSession > 0) {
+            // 只在有增量时才上报
+            reportActivityToElectron({ codePassed: codePassedIncrementInSession });
+            codePassedIncrementInSession = 0; // 上报后重置增量计数器
+        }
     }, REPORT_THROTTLE_MS);
 }
 
 export function activateCodePassTracker(context: vscode.ExtensionContext) {
     console.log('CS Valley Plugin: Activating Code Pass Tracker.');
-    // 加载持久化的 codePassedCount 和 filePassState
-    codePassedCount = context.workspaceState.get('csvalley.codePassedCount', 0);
+    // 不再从 context.workspaceState 加载 codePassedCount，因为我们现在追踪的是会话增量
+    codePassedIncrementInSession = 0; // 插件激活时重置增量计数
+
+    // filePassState 仍然需要加载和保存，用于判断文件的通过状态和节流
     const savedFilePassState = context.workspaceState.get<[string, number][]>('csvalley.filePassState', []);
     filePassState.clear();
     savedFilePassState.forEach(([uri, state]) => filePassState.set(uri, state));
 }
 
-export function deactivateCodePassTracker() {
+export function deactivateCodePassTracker(context: vscode.ExtensionContext) { // 注意：这里需要传入 context
     console.log('CS Valley Plugin: Deactivating Code Pass Tracker.');
     if (reportThrottleTimeout) {
         clearTimeout(reportThrottleTimeout);
     }
-    // 保存 codePassedCount 和 filePassState
-    context.workspaceState.update('csvalley.codePassedCount', codePassedCount);
+    // 保存 filePassState
     context.workspaceState.update('csvalley.filePassState', Array.from(filePassState.entries()));
+    // codePassedIncrementInSession 不需保存，因为它是一个会话增量
 }
