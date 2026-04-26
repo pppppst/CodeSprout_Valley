@@ -1,7 +1,7 @@
 {
-  "name": "temp-app",
+  "name": "electron-app",
   "version": "1.0.0",
-  "description": "An Electron application with Vue",
+  "description": "CodeSprout Valley Desktop Client",
   "main": "./out/main/index.js",
   "author": "example.com",
   "homepage": "https://electron-vite.org",
@@ -11,6 +11,7 @@
     "start": "electron-vite preview",
     "dev": "electron-vite dev",
     "build": "electron-vite build",
+    "test": "vitest",
     "postinstall": "electron-builder install-app-deps",
     "build:unpack": "npm run build && electron-builder --dir",
     "build:win": "npm run build && electron-builder --win",
@@ -32,6 +33,7 @@
     "eslint-plugin-vue": "^10.6.2",
     "prettier": "^3.7.4",
     "vite": "^7.2.6",
+    "vitest": "^4.1.5",
     "vue": "^3.5.25",
     "vue-eslint-parser": "^10.2.0"
   }
