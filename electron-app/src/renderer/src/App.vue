@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted, onBeforeUnmount } from 'vue'
 
 // ================= 悬浮窗模式判断 =================
 const isFloatingMode = ref(false)
@@ -19,15 +19,6 @@ function onHashChange() {
   checkHash()
 }
 
-onMounted(() => {
-  checkHash()
-  window.addEventListener('hashchange', onHashChange)
-})
-
-onBeforeUnmount(() => {
-  window.removeEventListener('hashchange', onHashChange)
-})
-
 // 双击恢复主窗口（悬浮模式下，绑定到内部无拖拽区域）
 function handleRestore() {
   if (window.api && typeof window.api.restoreMainUI === 'function') {
@@ -35,7 +26,7 @@ function handleRestore() {
   }
 }
 
-// 核心数据
+// ================= 核心数据 =================
 const codeLines = ref(150)
 const catExp = ref(0)
 const message = ref('🐱 睡觉中...')
@@ -43,25 +34,22 @@ const message = ref('🐱 睡觉中...')
 // 统计数据
 const feedCount = ref(0)
 const waterCount = ref(0)
-const isStatsVisible = ref(true)
+const foodStock = ref(20)
+const waterStock = ref(20)
+const isStatsVisible = ref(true) // 控制面板折叠
 
-// 补充缺的日期和节气变量（防止模板报错）
-const currentDate = computed(() => {
-  const now = new Date()
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
-})
-const currentSolarTerm = ref('春分') // 临时用，后期接真实节气
-
-// --- 核心功能函数 ---
+// ================= 核心功能函数 =================
 function feedCat() {
   catExp.value += 10
   feedCount.value++
+  foodStock.value = Math.max(foodStock.value - 10, 0)
   message.value = '😺 吧唧吧唧...好吃！(溢出经验+10)'
   setTimeout(() => message.value = '🐱 睡觉中...', 2000)
 }
 
 function waterPlant() {
   waterCount.value++
+  waterStock.value = Math.max(waterStock.value - 10, 0)
   message.value = '🌱 咕噜咕噜...水好甜！'
   setTimeout(() => message.value = '🐱 睡觉中...', 2000)
 }
@@ -71,108 +59,269 @@ function openGallery() {
   setTimeout(() => message.value = '🐱 睡觉中...', 2000)
 }
 
+function openSettings() {
+  message.value = '⚙️ 正在打开设置...'
+  setTimeout(() => message.value = '🐱 睡觉中...', 2000)
+}
+
+function openWeeklyReport() {
+  message.value = '🗞️ 正在打开节气周报...'
+  setTimeout(() => message.value = '🐱 睡觉中...', 2000)
+}
+
+// ================= 窗口控制函数 =================
+function minimizeWindow() {
+  window.api?.minimizeWindow?.()
+}
+
+function hideToTray() {
+  window.api?.hideToTray?.()
+}
+
+function closeWindow() {
+  window.api?.closeWindow?.()
+}
+
 function toggleStats() {
   isStatsVisible.value = !isStatsVisible.value
 }
 
+// ================= 经验与奖励逻辑 =================
 const activeGridCount = computed(() => {
   return Math.min(Math.floor(codeLines.value / 100), 5)
+})
+
+const highestRewardedThreshold = ref(activeGridCount.value)
+
+watch(activeGridCount, (newValue) => {
+  if (newValue > highestRewardedThreshold.value) {
+    const gainedThresholds = newValue - highestRewardedThreshold.value
+    const bonus = gainedThresholds * 20
+
+    foodStock.value += bonus
+    waterStock.value += bonus
+    highestRewardedThreshold.value = newValue
+  }
+})
+
+// ================= UI与时间逻辑 =================
+const now = ref(new Date())
+let timerId = null
+const uiScale = ref(1)
+
+function updateUiScale() {
+  const designWidth = 1365
+  const designHeight = 768
+  const scaleX = window.innerWidth / designWidth
+  const scaleY = window.innerHeight / designHeight
+  uiScale.value = Math.min(scaleX, scaleY)
+}
+
+const solarTermTable = [
+  [{ day: 6, name: '小寒' }, { day: 20, name: '大寒' }],
+  [{ day: 4, name: '立春' }, { day: 19, name: '雨水' }],
+  [{ day: 6, name: '惊蛰' }, { day: 21, name: '春分' }],
+  [{ day: 5, name: '清明' }, { day: 20, name: '谷雨' }],
+  [{ day: 6, name: '立夏' }, { day: 21, name: '小满' }],
+  [{ day: 6, name: '芒种' }, { day: 21, name: '夏至' }],
+  [{ day: 7, name: '小暑' }, { day: 23, name: '大暑' }],
+  [{ day: 7, name: '立秋' }, { day: 23, name: '处暑' }],
+  [{ day: 7, name: '白露' }, { day: 23, name: '秋分' }],
+  [{ day: 8, name: '寒露' }, { day: 23, name: '霜降' }],
+  [{ day: 7, name: '立冬' }, { day: 22, name: '小雪' }],
+  [{ day: 7, name: '大雪' }, { day: 22, name: '冬至' }]
+]
+
+function getSolarTerm(date) {
+  const month = date.getMonth()
+  const day = date.getDate()
+  const [first, second] = solarTermTable[month]
+
+  if (day >= second.day) return second.name
+  if (day >= first.day) return first.name
+
+  const prevMonth = (month + 11) % 12
+  return solarTermTable[prevMonth][1].name
+}
+
+const currentDate = computed(() => {
+  const year = now.value.getFullYear()
+  const month = String(now.value.getMonth() + 1).padStart(2, '0')
+  const day = String(now.value.getDate()).padStart(2, '0')
+  return `${year}年${month}月${day}日`
+})
+
+const currentSolarTerm = computed(() => getSolarTerm(now.value))
+
+// ================= 生命周期 =================
+onMounted(() => {
+  checkHash()
+  window.addEventListener('hashchange', onHashChange)
+  
+  updateUiScale()
+  window.addEventListener('resize', updateUiScale)
+
+  timerId = setInterval(() => {
+    now.value = new Date()
+  }, 60000)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('resize', updateUiScale)
+  if (timerId) {
+    clearInterval(timerId)
+  }
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('hashchange', onHashChange)
 })
 </script>
 
 <template>
-  <div
-    class="pet-container"
-    :class="{ 'floating-mode': isFloatingMode }"
-    style="-webkit-app-region: drag;"
-  >
-    <!-- 左上角可折叠统计面板（悬浮时隐藏） -->
+  <div class="viewport-root" :class="{ 'floating-root': isFloatingMode }">
     <div
-      v-show="!isFloatingMode"
-      class="stats-box"
-      :class="{ 'stats-expanded': isStatsVisible }"
-      style="-webkit-app-region: no-drag;"
+      class="pet-container"
+      :class="{ 'floating-mode': isFloatingMode }"
+      style="-webkit-app-region: drag;"
+      :style="isFloatingMode ? {} : { transform: `translate(-50%, -50%) scale(${uiScale})` }"
     >
-      <div class="stats-header" @click="toggleStats">
-        <span>📊 实时状态</span>
-        <span>{{ isStatsVisible ? '▲' : '▼' }}</span>
+
+      <div v-show="!isFloatingMode" class="window-controls" style="-webkit-app-region: no-drag;">
+        <button class="window-btn window-btn-minimize" @click="minimizeWindow" aria-label="最小化">
+          <span class="minimize-glyph" aria-hidden="true"></span>
+        </button>
+        <button class="window-btn" @click="hideToTray" aria-label="隐藏到状态栏">T</button>
+        <button class="window-btn close" @click="closeWindow" aria-label="关闭">X</button>
       </div>
-      <div v-show="isStatsVisible" class="stats-content">
-        <div class="stat-item">
-          <span>代码行数: {{ codeLines }}</span>
-          <div class="progress-bar">
-            <div
-              v-for="i in 5"
-              :key="i"
-              class="grid"
-              :class="{ active: i <= activeGridCount }"
-            ></div>
+    
+      <div
+        v-show="!isFloatingMode"
+        class="stats-box"
+        style="-webkit-app-region: no-drag;"
+      >
+        <div class="stats-header" @click="toggleStats">
+          <span class="stats-title">实时状态</span>
+        </div>
+        
+        <div v-show="isStatsVisible" class="stats-content">
+          <div class="stat-item">
+            <span>代码行数: {{ codeLines }}</span>
+            <div class="progress-bar">
+              <div 
+                v-for="i in 5" 
+                :key="i" 
+                class="grid" 
+                :class="{ active: i <= activeGridCount }"
+              ></div>
+            </div>
+          </div>
+          <div class="stat-detail">
+            <p>🍖 今日喂食: {{ feedCount }} 次</p>
+            <p>💧 今日浇水: {{ waterCount }} 次</p>
+            <p>🧺 剩余猫粮: {{ foodStock }}</p>
+            <p>🚿 剩余水量: {{ waterStock }}</p>
           </div>
         </div>
-        <div class="stat-detail">
-          <p>🍖 今日喂食: {{ feedCount }} 次</p>
-          <p>💧 今日浇水: {{ waterCount }} 次</p>
+      </div>
+
+      <div v-show="!isFloatingMode" class="status-bar">
+        <h3> {{ currentDate }} · {{ currentSolarTerm }}</h3>
+      </div>
+
+      <div
+        class="pet-area"
+        style="-webkit-app-region: no-drag;"
+        @dblclick="handleRestore"
+      >
+        <div class="bubble">{{ message }}</div>
+        <div class="characters">
+          <img class="cat-image" src="./assets/cat.png">
+          <img
+            v-show="!isFloatingMode"
+            class="plant-image"
+            src="./assets/plant.png"
+          />
         </div>
       </div>
-    </div>
 
-    <!-- 状态栏（悬浮时隐藏） -->
-    <div v-show="!isFloatingMode" class="status-bar">
-      <h3>📅 {{ currentDate }} · {{ currentSolarTerm }}</h3>
-    </div>
-
-    <!-- 宠物展示区：绑定双击恢复，取消拖拽属性 -->
-    <div
-      class="pet-area"
-      style="-webkit-app-region: no-drag;"
-      @dblclick="handleRestore"
-    >
-      <div class="bubble">{{ message }}</div>
-      <div class="characters">
-        <img class="cat-image" src="./assets/cat.png" />
-        <!-- 植物：悬浮窗时隐藏 -->
-        <img
-          v-show="!isFloatingMode"
-          class="plant-image"
-          src="./assets/plant.png"
-        />
+      <div v-show="!isFloatingMode" class="action-panel" style="-webkit-app-region: no-drag;">
+        <button class="image-btn" @click="feedCat" aria-label="喂猫粮">
+          <img src="./assets/btn-feed.png" alt="喂猫粮" draggable="false">
+        </button>
+        <button class="image-btn" @click="waterPlant" aria-label="浇水">
+          <img src="./assets/btn-water.png" alt="浇水" draggable="false">
+        </button>
+        <button class="image-btn" @click="openGallery" aria-label="图鉴合集">
+          <img src="./assets/btn-gallery.png" alt="图鉴合集" draggable="false">
+        </button>
+        <button class="image-btn image-btn-settings" @click="openSettings" aria-label="设置">
+          <img src="./assets/btn-settings.png" alt="设置" draggable="false">
+        </button>
+        <button class="image-btn image-btn-weekly-report" @click="openWeeklyReport" aria-label="节气周报">
+          <img src="./assets/btn-weekly-report.png" alt="节气周报" draggable="false">
+        </button>
       </div>
-    </div>
-
-    <!-- 操作按钮区（悬浮时隐藏） -->
-    <div v-show="!isFloatingMode" class="action-panel" style="-webkit-app-region: no-drag;">
-      <button @click="feedCat">🍖 喂猫粮</button>
-      <button @click="waterPlant">💧 浇水</button>
-      <button @click="openGallery">📚 赛博图鉴</button>
+    
     </div>
   </div>
 </template>
 
 <style scoped>
-.pet-container {
+.viewport-root {
   width: 100vw;
   height: 100vh;
+  overflow: hidden;
   position: relative;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
   background-image: url('./assets/initial_background.png');
   background-size: cover;
   background-position: center;
+  background-repeat: no-repeat;
+}
+
+/* 悬浮模式时隐藏 viewport-root 的背景 */
+.viewport-root.floating-root {
+  background: transparent !important;
+  background-image: none !important;
+}
+
+.pet-container {
+  --ui-bg: rgba(134, 212, 152, 0.88);
+  --ui-bg-hover: rgba(141, 200, 157, 0.93);
+  --ui-border: #879e94;
+  --ui-shadow: #768a81;
+  --ui-text: #f6f3ea;
+  width: 1365px;
+  height: 768px;
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   color: white;
   border-radius: 20px;
-  font-family: "思源黑体", "Microsoft YaHei", "更纱黑体", sans-serif;
+  font-family: "华文中宋", "Microsoft YaHei", "黑体", sans-serif;
   font-size: 15px;
-  overflow: hidden;
+  transform-origin: center center;
+}
+
+.pet-container,
+.pet-container * {
+  font-weight: 900;
 }
 
 /* 悬浮模式下：透明背景，自适应内容，允许滚动条 */
 .pet-container.floating-mode {
+  position: relative;
+  top: 0;
+  left: 0;
+  transform: none !important;
   background: transparent !important;
   background-image: none !important;
   width: auto !important;
   height: auto !important;
-  overflow: auto;
+  overflow: visible;
   display: inline-flex;
   flex-direction: column;
   align-items: center;
@@ -180,93 +329,198 @@ const activeGridCount = computed(() => {
   border-radius: 0;
 }
 
-/* 悬浮模式下宠物区域不再撑满空间 */
 .pet-container.floating-mode .pet-area {
+  position: relative;
   flex: 0 0 auto;
 }
 
-/* 统计面板 */
-.stats-box {
+/* 自定义窗口按钮 */
+.window-controls {
   position: absolute;
-  top: 20px;
-  left: 20px;
-  width: 220px;
-  border-radius: 12px;
-  overflow: hidden;
-  transition: all 0.2s ease;
+  top: 14px;
+  right: 20px;
+  display: flex;
+  gap: 8px;
+  z-index: 6;
 }
 
-.stats-expanded {
-  background: rgba(255, 255, 255, 0.15);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
-  border: 1px solid rgba(255, 255, 255, 0.25);
+.window-btn {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(84, 78, 62, 0.45);
+  border-radius: 50%;
+  background: rgba(252, 248, 236, 0.85);
+  color: #5a4730;
+  font-size: 17px;
+  font-family: "Microsoft YaHei", sans-serif;
+  line-height: 1;
+  cursor: pointer;
+  transition: transform 0.12s ease, background-color 0.12s ease;
+}
+
+.window-btn-minimize {
+  transform: translateY(-1px);
+}
+
+.minimize-glyph {
+  display: block;
+  width: 15px;
+  height: 2px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.window-btn:hover {
+  background: rgba(252, 248, 236, 0.98);
+  transform: translateY(-1px);
+}
+
+.window-btn:active {
+  transform: translateY(1px);
+}
+
+.window-btn-minimize:hover {
+  transform: translateY(-2px);
+}
+
+.window-btn-minimize:active {
+  transform: translateY(0);
+}
+
+.window-btn.close:hover {
+  background: rgba(238, 87, 87, 0.9);
+  color: #fff;
+  border-color: rgba(170, 45, 45, 0.75);
+}
+
+/* 统计面板容器 */
+.stats-box {
+  position: absolute;
+  top: 30px;
+  left: 78%;
+  transform: translateX(-50%);
+  width: 310px;
+  height: 300px;
+  overflow: visible;
+  transition: all 0.2s ease;
+  background-image: url('./assets/stats-expanded.png');
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 100% 100%;
+  border: none;
+  box-shadow: none;
+  z-index: 4;
 }
 
 .stats-header {
-  padding: 10px 15px;
+  position: absolute;
+  top: 1px;
+  left: 93px;
+  right: 56px;
+  height: 78px;
   display: flex;
-  justify-content: space-between;
+  align-items: center;
   cursor: pointer;
-  font-weight: bold;
-  color: #2c5e2c;
-  transition: background 0.2s ease;
 }
 
-.stats-expanded .stats-header {
-  background: rgba(100, 150, 100, 0.2);
-  backdrop-filter: blur(4px);
-  -webkit-backdrop-filter: blur(4px);
+.stats-title {
+  font-size: 25px;
+  font-weight: 400;
+  color: #f3efe5;
+  letter-spacing: 1px;
+  text-shadow: 0 2px 3px rgba(40, 32, 18, 0.3);
 }
 
 .stats-content {
-  padding: 15px;
+  position: absolute;
+  top: 68px;
+  left: 48px;
+  right: 60px;
+  bottom: 76px;
+  padding: 0;
+  color: #4a3f2f;
 }
 
 .progress-bar {
   display: flex;
   gap: 4px;
-  margin-top: 8px;
-  height: 12px;
+  margin-top: 2px;
+  height: 25px;
+  padding: 3px;
+  border: 2px solid rgba(44, 94, 44, 0.62);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.65);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.08);
+  width: 200px;
 }
 .grid {
   flex: 1;
-  background: rgba(255, 255, 255, 0.2);
-  border-radius: 2px;
+  background: rgba(44, 94, 44, 0.16);
+  border-radius: 8px;
 }
 .grid.active {
   background: #4CAF50;
-  box-shadow: 0 0 8px #4CAF50;
+  box-shadow: 0 0 5px #4CAF50;
 }
 .stat-detail p {
-  margin: 10px 0 0 0;
-  font-size: 14px;
-  color: #000000;
+  margin: 3px 0 0 0;
+  font-size: 18px;
+  color: #4a3f2f;
 }
 
-.stat-item span {
-  color: #000000;
-  font-size: 14px;
+.stat-item span{
+  color: #4a3f2f;
+  font-size: 18px;
 }
 
+/* 状态栏 */
 .status-bar {
-  margin-top: 30px;
-  background: rgba(44, 94, 44, 0.15);
-  backdrop-filter: blur(4px);
-  -webkit-backdrop-filter: blur(4px);
-  padding: 8px 24px;
-  border-radius: 20px;
-  border: 1px solid rgba(100, 150, 100, 0.25);
+  position: absolute;
+  top: 22px;
+  left: 520px;
+  width: 420px;
+  height: 96px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  background-image: url('./assets/date-banner.png');
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 100% 100%;
+  padding: 0 36px;
+  border: none;
+  box-shadow: none;
+  z-index: 3;
+}
+
+.status-bar h3 {
+  margin: 0;
+  color: #6a5138;
+  font-size: 21px;
+  font-weight: 900;
+  letter-spacing: 2px;
+  line-height: 1;
+  white-space: nowrap;
+  text-shadow: none;
+  transform: translateY(-4px);
 }
 
 .pet-area {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
 }
 .bubble {
+  position: absolute;
+  left: 43%;
+  top: 69%;
+  transform: translate(-50%, -50%);
   background: rgba(255, 255, 255, 0.95);
   color: #333;
   padding: 12px 20px;
@@ -275,10 +529,21 @@ const activeGridCount = computed(() => {
   font-size: 18px;
   margin-bottom: 20px;
   box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+  pointer-events: auto;
+}
+
+.characters {
+  position: absolute;
+  left: 43%;
+  top: 78%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  align-items: flex-end;
+  pointer-events: auto;
 }
 
 .cat-image {
-  width: 180px;
+  width: 250px;
   filter: drop-shadow(0px 10px 10px rgba(0,0,0,0.5));
   transition: transform 0.2s;
 }
@@ -286,44 +551,65 @@ const activeGridCount = computed(() => {
   transform: scale(1.1);
 }
 .plant-image {
-  width: 80px;
-  margin-left: +10px;
+  width: 95px;
+  margin-left: -24px;
+  margin-bottom: 8px;
 }
 
-/* 悬浮模式下植物图片不改变样式（因为它直接隐藏了） */
-
+/* 操作按钮区 */
 .action-panel {
-  position: absolute;
-  top: 80px;
+  position: absolute; 
+  top: 30px;
   right: 20px;
   display: flex;
   flex-direction: column;
-  gap: 15px;
+  align-items: flex-end;
+  gap: 10px;
+  z-index: 4;
 }
-button {
-  width: 160px;
-  padding: 12px 0;
-  font-size: 20px;
-  font-weight: bold;
-  background-color: #4a7c59;
-  color: #f9fff5;
-  border: 3px solid #365d42;
-  border-radius: 4px;
+.image-btn {
+  width: 150px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  line-height: 0;
   cursor: pointer;
-  box-shadow: 0 4px 0 #25422d;
-  transition: all 0.1s;
+  transition: transform 0.12s ease, filter 0.12s ease;
 }
-button:hover {
-  background-color: #5a9469;
+
+.image-btn-settings {
+  width: 150px;
+  margin-right: 0px;
+  margin-top: 0;
 }
-button:active {
-  transform: translateY(4px);
-  box-shadow: 0 0 0 #365d42;
+
+.image-btn-weekly-report {
+  width: 150px;
+  margin-right: 0;
+  margin-top: 0;
+}
+
+.image-btn img {
+  width: 100%;
+  height: auto;
+  display: block;
+  user-select: none;
+  pointer-events: none;
+}
+
+.image-btn:hover {
+  filter: brightness(1.04);
+  transform: translateY(-1px);
+}
+
+.image-btn:active {
+  filter: brightness(0.98);
+  transform: translateY(2px);
 }
 </style>
 
 <style>
-/* 悬浮时全局透明，允许滚动条 */
+/* 悬浮时全局透明 */
 html.floating,
 body.floating {
   background: transparent !important;

@@ -1,10 +1,15 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
 
+// 整合两套自定义 APIs 供渲染进程使用
 const api = {
-  // 开启悬浮窗
+  // === 来自 new_ui_4_27：自定义标题栏的窗口控制 ===
+  minimizeWindow: () => ipcRenderer.send('window:minimize'),
+  hideToTray: () => ipcRenderer.send('window:hideToTray'),
+  closeWindow: () => ipcRenderer.send('window:close'),
+
+  // === 来自 main：桌面宠物悬浮窗控制 ===
   enableFloatingMode: () => ipcRenderer.send('enable-floating-mode'),
-  // 恢复主界面
   restoreMainUI: () => ipcRenderer.send('restore-main-ui')
 }
 

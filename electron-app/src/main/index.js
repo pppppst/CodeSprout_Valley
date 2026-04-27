@@ -1,21 +1,24 @@
-import { app, shell, BrowserWindow, ipcMain, Tray, Menu } from 'electron'
+import { app, shell, BrowserWindow, Menu, Tray, ipcMain } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 
-// 定义全局变量，确保在整个主进程中可以访问
+// === 来自 new_ui_4_27 的设计尺寸 ===
+const DESIGN_WIDTH = 1365
+const DESIGN_HEIGHT = 768
+
+// === 来自 main 的全局变量，确保整个主进程可访问 ===
 let mainWindow
 let floatingWindow
-let tray
+let tray = null
 
 /**
  * 1. 创建常规主界面窗口
- * 保留标准 Windows 边框和标题栏
  */
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 1440,
-    height: 810,
+    width: DESIGN_WIDTH, // 使用新 UI 尺寸
+    height: DESIGN_HEIGHT,
     show: false,
     autoHideMenuBar: true,
     ...(process.platform === 'linux' ? { icon } : {}),
@@ -25,11 +28,14 @@ function createWindow() {
     }
   })
 
+  // Lock resizing to the original UI ratio (来自 new_ui_4_27)
+  mainWindow.setAspectRatio(DESIGN_WIDTH / DESIGN_HEIGHT)
+
   mainWindow.on('ready-to-show', () => {
     mainWindow.show()
   })
 
-  // 拦截点击系统原生“最小化”按钮的事件
+  // 拦截点击系统原生“最小化”按钮的事件 (来自 main 悬浮窗逻辑)
   mainWindow.on('minimize', (event) => {
     event.preventDefault() // 阻止默认的最小化到任务栏动作
     mainWindow.hide()      // 隐藏主窗口
@@ -51,7 +57,7 @@ function createWindow() {
 }
 
 /**
- * 2. 创建独立的桌面悬浮窗
+ * 2. 创建独立的桌面悬浮窗 (来自 main)
  * 实现无边框、背景透明、始终置顶
  */
 function createFloatingWindow() {
@@ -84,12 +90,13 @@ function createFloatingWindow() {
 }
 
 /**
- * 3. 封装统一的恢复主界面逻辑
+ * 3. 封装统一的恢复主界面逻辑 (来自 main)
  * 供托盘右键、托盘左键、悬浮窗双击共用
  */
 function restoreMainInterface() {
   if (mainWindow) {
     mainWindow.show()
+    if (mainWindow.isMinimized()) mainWindow.restore()
     mainWindow.focus() // 确保窗口获取焦点，直接显示在最前面
   }
   if (floatingWindow) {
@@ -99,7 +106,7 @@ function restoreMainInterface() {
 }
 
 /**
- * 4. 设置系统托盘
+ * 4. 设置系统托盘 (来自 main)
  * 提供恢复主界面的入口
  */
 function setupTray() {
@@ -111,7 +118,8 @@ function setupTray() {
       label: '恢复主界面',
       click: () => restoreMainInterface()
     },
-    { label: '退出 CodeSprout Valley', role: 'quit' }
+    { type: 'separator' },
+    { label: '退出 CodeSprout Valley', click: () => app.quit() }
   ])
 
   tray.setToolTip('CodeSprout Valley 陪伴中')
@@ -140,17 +148,29 @@ app.whenReady().then(() => {
     optimizer.watchWindowShortcuts(window)
   })
 
+  // === 合并的 IPC 通信逻辑 ===
+
+  // 1. 来自 new_ui_4_27 的自定义窗口控制 (适配了全局变量)
+  ipcMain.on('ping', () => console.log('pong'))
+  ipcMain.on('window:minimize', () => {
+    if (mainWindow) mainWindow.minimize() // 触发原生的 minimize 事件，进而打开悬浮窗
+  })
+  ipcMain.on('window:hideToTray', () => {
+    if (mainWindow) mainWindow.hide()
+    setupTray()
+  })
+  ipcMain.on('window:close', () => app.quit())
+
   // 启动程序，显示主界面
   createWindow()
 
-  // 监听来自 Vue 前端按钮的指令：手动开启悬浮模式
+  // 2. 来自 main 的悬浮窗与托盘控制
   ipcMain.on('enable-floating-mode', () => {
     if (mainWindow) mainWindow.hide()
     createFloatingWindow()
     setupTray()
   })
 
-  // 监听来自悬浮窗的指令：手动恢复主界面
   ipcMain.on('restore-main-ui', () => {
     restoreMainInterface()
   })
@@ -163,5 +183,12 @@ app.whenReady().then(() => {
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit()
+  }
+})
+
+app.on('before-quit', () => {
+  if (tray) {
+    tray.destroy()
+    tray = null
   }
 })
