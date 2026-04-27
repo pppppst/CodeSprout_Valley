@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 
 // 核心数据
 const codeLines = ref(150)
@@ -9,12 +9,15 @@ const message = ref('🐱 睡觉中...')
 // 统计数据
 const feedCount = ref(0)
 const waterCount = ref(0)
+const foodStock = ref(20)
+const waterStock = ref(20)
 
 // --- 核心功能函数 ---
 // 喂猫粮
 function feedCat() {
   catExp.value += 10
   feedCount.value++
+  foodStock.value = Math.max(foodStock.value - 10, 0)
   message.value = '😺 吧唧吧唧...好吃！(溢出经验+10)'
   setTimeout(() => message.value = '🐱 睡觉中...', 2000)
 }
@@ -22,6 +25,7 @@ function feedCat() {
 // 浇水
 function waterPlant() {
   waterCount.value++
+  waterStock.value = Math.max(waterStock.value - 10, 0)
   message.value = '🌱 咕噜咕噜...水好甜！'
   setTimeout(() => message.value = '🐱 睡觉中...', 2000)
 }
@@ -32,9 +36,44 @@ function openGallery() {
   setTimeout(() => message.value = '🐱 睡觉中...', 2000)
 }
 
+function openSettings() {
+  message.value = '⚙️ 正在打开设置...'
+  setTimeout(() => message.value = '🐱 睡觉中...', 2000)
+}
+
+function openWeeklyReport() {
+  message.value = '🗞️ 正在打开节气周报...'
+  setTimeout(() => message.value = '🐱 睡觉中...', 2000)
+}
+
+function minimizeWindow() {
+  window.api?.minimizeWindow?.()
+}
+
+function hideToTray() {
+  window.api?.hideToTray?.()
+}
+
+function closeWindow() {
+  window.api?.closeWindow?.()
+}
+
 // 进度条计算属性
 const activeGridCount = computed(() => {
   return Math.min(Math.floor(codeLines.value / 100), 5)
+})
+
+const highestRewardedThreshold = ref(activeGridCount.value)
+
+watch(activeGridCount, (newValue) => {
+  if (newValue > highestRewardedThreshold.value) {
+    const gainedThresholds = newValue - highestRewardedThreshold.value
+    const bonus = gainedThresholds * 20
+
+    foodStock.value += bonus
+    waterStock.value += bonus
+    highestRewardedThreshold.value = newValue
+  }
 })
 
 const now = ref(new Date())
@@ -110,6 +149,14 @@ onUnmounted(() => {
       style="-webkit-app-region: drag;"
       :style="{ transform: `translate(-50%, -50%) scale(${uiScale})` }"
     >
+
+    <div class="window-controls" style="-webkit-app-region: no-drag;">
+      <button class="window-btn window-btn-minimize" @click="minimizeWindow" aria-label="最小化">
+        <span class="minimize-glyph" aria-hidden="true"></span>
+      </button>
+      <button class="window-btn" @click="hideToTray" aria-label="隐藏到状态栏">T</button>
+      <button class="window-btn close" @click="closeWindow" aria-label="关闭">X</button>
+    </div>
     
     <!-- 左上角可折叠统计面板 -->
   <div
@@ -136,6 +183,8 @@ onUnmounted(() => {
       <div class="stat-detail">
         <p>🍖 今日喂食: {{ feedCount }} 次</p>
         <p>💧 今日浇水: {{ waterCount }} 次</p>
+        <p>🧺 剩余猫粮: {{ foodStock }}</p>
+        <p>🚿 剩余水量: {{ waterStock }}</p>
       </div>
     </div>
   </div>
@@ -164,6 +213,12 @@ onUnmounted(() => {
       </button>
       <button class="image-btn" @click="openGallery" aria-label="图鉴合集">
         <img src="./assets/btn-gallery.png" alt="图鉴合集" draggable="false">
+      </button>
+      <button class="image-btn image-btn-settings" @click="openSettings" aria-label="设置">
+        <img src="./assets/btn-settings.png" alt="设置" draggable="false">
+      </button>
+      <button class="image-btn image-btn-weekly-report" @click="openWeeklyReport" aria-label="节气周报">
+        <img src="./assets/btn-weekly-report.png" alt="节气周报" draggable="false">
       </button>
     </div>
     
@@ -213,7 +268,69 @@ onUnmounted(() => {
   font-weight: 900;
 }
 
-/* 统计面板容器（折叠时完全透明，无背景无框） */
+.window-controls {
+  position: absolute;
+  top: 14px;
+  right: 20px;
+  display: flex;
+  gap: 8px;
+  z-index: 6;
+}
+
+.window-btn {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(84, 78, 62, 0.45);
+  border-radius: 50%;
+  background: rgba(252, 248, 236, 0.85);
+  color: #5a4730;
+  font-size: 17px;
+  font-family: "Microsoft YaHei", sans-serif;
+  line-height: 1;
+  cursor: pointer;
+  transition: transform 0.12s ease, background-color 0.12s ease;
+}
+
+.window-btn-minimize {
+  transform: translateY(-1px);
+}
+
+.minimize-glyph {
+  display: block;
+  width: 15px;
+  height: 2px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.window-btn:hover {
+  background: rgba(252, 248, 236, 0.98);
+  transform: translateY(-1px);
+}
+
+.window-btn:active {
+  transform: translateY(1px);
+}
+
+.window-btn-minimize:hover {
+  transform: translateY(-2px);
+}
+
+.window-btn-minimize:active {
+  transform: translateY(0);
+}
+
+.window-btn.close:hover {
+  background: rgba(238, 87, 87, 0.9);
+  color: #fff;
+  border-color: rgba(170, 45, 45, 0.75);
+}
+
+/* 统计面板容器 */
 .stats-box {
   position: absolute;
   top: 30px;
@@ -253,7 +370,7 @@ onUnmounted(() => {
 
 .stats-content {
   position: absolute;
-  top: 70px;
+  top: 68px;
   left: 48px;
   right: 60px;
   bottom: 76px;
@@ -265,8 +382,8 @@ onUnmounted(() => {
 .progress-bar {
   display: flex;
   gap: 4px;
-  margin-top: 10px;
-  height: 30px;
+  margin-top: 2px;
+  height: 25px;
   padding: 3px;
   border: 2px solid rgba(44, 94, 44, 0.62);
   border-radius: 14px;
@@ -281,17 +398,17 @@ onUnmounted(() => {
 }
 .grid.active {
   background: #4CAF50;
-  box-shadow: 0 0 8px #4CAF50;
+  box-shadow: 0 0 5px #4CAF50;
 }
 .stat-detail p {
-  margin: 7px 0 0 0;
-  font-size: 21px;
+  margin: 3px 0 0 0;
+  font-size: 18px;
   color: #4a3f2f;
 }
 
 .stat-item span{
   color: #4a3f2f;
-  font-size: 22px;
+  font-size: 18px;
 }
 /* 状态栏样式（青黛国风） */
 .status-bar {
@@ -381,6 +498,7 @@ onUnmounted(() => {
   right: 20px;
   display: flex;
   flex-direction: column;
+  align-items: flex-end;
   gap: 10px;
   z-index: 4;
 }
@@ -392,6 +510,19 @@ onUnmounted(() => {
   line-height: 0;
   cursor: pointer;
   transition: transform 0.12s ease, filter 0.12s ease;
+}
+
+/* 只改这里就能单独调整两个新按钮尺寸 */
+.image-btn-settings {
+  width: 150px;
+  margin-right: 0px;
+  margin-top: 0;
+}
+
+.image-btn-weekly-report {
+  width: 150px;
+  margin-right: 0;
+  margin-top: 0;
 }
 
 .image-btn img {
