@@ -1,7 +1,32 @@
 <script setup>
-import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted, onBeforeUnmount } from 'vue'
 
-// 核心数据
+// ================= 悬浮窗模式判断 =================
+const isFloatingMode = ref(false)
+
+function checkHash() {
+  isFloatingMode.value = window.location.hash === '#floating'
+  if (isFloatingMode.value) {
+    document.documentElement.classList.add('floating')
+    document.body.classList.add('floating')
+  } else {
+    document.documentElement.classList.remove('floating')
+    document.body.classList.remove('floating')
+  }
+}
+
+function onHashChange() {
+  checkHash()
+}
+
+// 双击恢复主窗口（悬浮模式下，绑定到内部无拖拽区域）
+function handleRestore() {
+  if (window.api && typeof window.api.restoreMainUI === 'function') {
+    window.api.restoreMainUI()
+  }
+}
+
+// ================= 核心数据 =================
 const codeLines = ref(150)
 const catExp = ref(0)
 const message = ref('🐱 睡觉中...')
@@ -11,9 +36,9 @@ const feedCount = ref(0)
 const waterCount = ref(0)
 const foodStock = ref(20)
 const waterStock = ref(20)
+const isStatsVisible = ref(true) // 控制面板折叠
 
-// --- 核心功能函数 ---
-// 喂猫粮
+// ================= 核心功能函数 =================
 function feedCat() {
   catExp.value += 10
   feedCount.value++
@@ -22,7 +47,6 @@ function feedCat() {
   setTimeout(() => message.value = '🐱 睡觉中...', 2000)
 }
 
-// 浇水
 function waterPlant() {
   waterCount.value++
   waterStock.value = Math.max(waterStock.value - 10, 0)
@@ -30,7 +54,6 @@ function waterPlant() {
   setTimeout(() => message.value = '🐱 睡觉中...', 2000)
 }
 
-// 打开图鉴
 function openGallery() {
   message.value = '📖 正在打开节气图鉴...'
   setTimeout(() => message.value = '🐱 睡觉中...', 2000)
@@ -46,6 +69,7 @@ function openWeeklyReport() {
   setTimeout(() => message.value = '🐱 睡觉中...', 2000)
 }
 
+// ================= 窗口控制函数 =================
 function minimizeWindow() {
   window.api?.minimizeWindow?.()
 }
@@ -58,7 +82,11 @@ function closeWindow() {
   window.api?.closeWindow?.()
 }
 
-// 进度条计算属性
+function toggleStats() {
+  isStatsVisible.value = !isStatsVisible.value
+}
+
+// ================= 经验与奖励逻辑 =================
 const activeGridCount = computed(() => {
   return Math.min(Math.floor(codeLines.value / 100), 5)
 })
@@ -76,6 +104,7 @@ watch(activeGridCount, (newValue) => {
   }
 })
 
+// ================= UI与时间逻辑 =================
 const now = ref(new Date())
 let timerId = null
 const uiScale = ref(1)
@@ -124,7 +153,11 @@ const currentDate = computed(() => {
 
 const currentSolarTerm = computed(() => getSolarTerm(now.value))
 
+// ================= 生命周期 =================
 onMounted(() => {
+  checkHash()
+  window.addEventListener('hashchange', onHashChange)
+  
   updateUiScale()
   window.addEventListener('resize', updateUiScale)
 
@@ -135,92 +168,100 @@ onMounted(() => {
 
 onUnmounted(() => {
   window.removeEventListener('resize', updateUiScale)
-
   if (timerId) {
     clearInterval(timerId)
   }
 })
+
+onBeforeUnmount(() => {
+  window.removeEventListener('hashchange', onHashChange)
+})
 </script>
 
 <template>
-  <div class="viewport-root">
+  <div class="viewport-root" :class="{ 'floating-root': isFloatingMode }">
     <div
       class="pet-container"
+      :class="{ 'floating-mode': isFloatingMode }"
       style="-webkit-app-region: drag;"
-      :style="{ transform: `translate(-50%, -50%) scale(${uiScale})` }"
+      :style="isFloatingMode ? {} : { transform: `translate(-50%, -50%) scale(${uiScale})` }"
     >
 
-    <div class="window-controls" style="-webkit-app-region: no-drag;">
-      <button class="window-btn window-btn-minimize" @click="minimizeWindow" aria-label="最小化">
-        <span class="minimize-glyph" aria-hidden="true"></span>
-      </button>
-      <button class="window-btn" @click="hideToTray" aria-label="隐藏到状态栏">T</button>
-      <button class="window-btn close" @click="closeWindow" aria-label="关闭">X</button>
-    </div>
+      <div v-show="!isFloatingMode" class="window-controls" style="-webkit-app-region: no-drag;">
+        <button class="window-btn window-btn-minimize" @click="minimizeWindow" aria-label="最小化">
+          <span class="minimize-glyph" aria-hidden="true"></span>
+        </button>
+        <button class="window-btn" @click="hideToTray" aria-label="隐藏到状态栏">T</button>
+        <button class="window-btn close" @click="closeWindow" aria-label="关闭">X</button>
+      </div>
     
-    <!-- 左上角可折叠统计面板 -->
-  <div
-    class="stats-box"
-    style="-webkit-app-region: no-drag;"
-  >
-    <div class="stats-header">
-      <span class="stats-title">实时状态</span>
-    </div>
-    
-    <div class="stats-content">
-      <!-- 原有内容不变 -->
-      <div class="stat-item">
-        <span>代码行数: {{ codeLines }}</span>
-        <div class="progress-bar">
-          <div 
-            v-for="i in 5" 
-            :key="i" 
-            class="grid" 
-            :class="{ active: i <= activeGridCount }"
-          ></div>
+      <div
+        v-show="!isFloatingMode"
+        class="stats-box"
+        style="-webkit-app-region: no-drag;"
+      >
+        <div class="stats-header" @click="toggleStats">
+          <span class="stats-title">实时状态</span>
+        </div>
+        
+        <div v-show="isStatsVisible" class="stats-content">
+          <div class="stat-item">
+            <span>代码行数: {{ codeLines }}</span>
+            <div class="progress-bar">
+              <div 
+                v-for="i in 5" 
+                :key="i" 
+                class="grid" 
+                :class="{ active: i <= activeGridCount }"
+              ></div>
+            </div>
+          </div>
+          <div class="stat-detail">
+            <p>🍖 今日喂食: {{ feedCount }} 次</p>
+            <p>💧 今日浇水: {{ waterCount }} 次</p>
+            <p>🧺 剩余猫粮: {{ foodStock }}</p>
+            <p>🚿 剩余水量: {{ waterStock }}</p>
+          </div>
         </div>
       </div>
-      <div class="stat-detail">
-        <p>🍖 今日喂食: {{ feedCount }} 次</p>
-        <p>💧 今日浇水: {{ waterCount }} 次</p>
-        <p>🧺 剩余猫粮: {{ foodStock }}</p>
-        <p>🚿 剩余水量: {{ waterStock }}</p>
+
+      <div v-show="!isFloatingMode" class="status-bar">
+        <h3> {{ currentDate }} · {{ currentSolarTerm }}</h3>
       </div>
-    </div>
-  </div>
 
-    <!-- 状态栏替换为日期+节气 -->
-    <div class="status-bar">
-      <h3> {{ currentDate }} · {{ currentSolarTerm }}</h3>
-    </div>
-
-    <!-- 宠物展示区 -->
-    <div class="pet-area">
-      <div class="bubble">{{ message }}</div>
-      <div class="characters">
-        <img class="cat-image" src="./assets/cat.png">
-
+      <div
+        class="pet-area"
+        style="-webkit-app-region: no-drag;"
+        @dblclick="handleRestore"
+      >
+        <div class="bubble">{{ message }}</div>
+        <div class="characters">
+          <img class="cat-image" src="./assets/cat.png">
+          <img
+            v-show="!isFloatingMode"
+            class="plant-image"
+            src="./assets/plant.png"
+          />
+        </div>
       </div>
-    </div>
 
-    <!-- 操作按钮区 -->
-    <div class="action-panel" style="-webkit-app-region: no-drag;">
-      <button class="image-btn" @click="feedCat" aria-label="喂猫粮">
-        <img src="./assets/btn-feed.png" alt="喂猫粮" draggable="false">
-      </button>
-      <button class="image-btn" @click="waterPlant" aria-label="浇水">
-        <img src="./assets/btn-water.png" alt="浇水" draggable="false">
-      </button>
-      <button class="image-btn" @click="openGallery" aria-label="图鉴合集">
-        <img src="./assets/btn-gallery.png" alt="图鉴合集" draggable="false">
-      </button>
-      <button class="image-btn image-btn-settings" @click="openSettings" aria-label="设置">
-        <img src="./assets/btn-settings.png" alt="设置" draggable="false">
-      </button>
-      <button class="image-btn image-btn-weekly-report" @click="openWeeklyReport" aria-label="节气周报">
-        <img src="./assets/btn-weekly-report.png" alt="节气周报" draggable="false">
-      </button>
-    </div>
+      <div v-show="!isFloatingMode" class="action-panel" style="-webkit-app-region: no-drag;">
+        <button class="image-btn" @click="feedCat" aria-label="喂猫粮">
+          <img src="./assets/btn-feed.png" alt="喂猫粮" draggable="false">
+        </button>
+        <button class="image-btn" @click="waterPlant" aria-label="浇水">
+          <img src="./assets/btn-water.png" alt="浇水" draggable="false">
+        </button>
+        <button class="image-btn" @click="openGallery" aria-label="图鉴合集">
+          <img src="./assets/btn-gallery.png" alt="图鉴合集" draggable="false">
+        </button>
+        <button class="image-btn image-btn-settings" @click="openSettings" aria-label="设置">
+          <img src="./assets/btn-settings.png" alt="设置" draggable="false">
+        </button>
+        <button class="image-btn image-btn-weekly-report" @click="openWeeklyReport" aria-label="节气周报">
+          <img src="./assets/btn-weekly-report.png" alt="节气周报" draggable="false">
+        </button>
+      </div>
     
     </div>
   </div>
@@ -238,6 +279,12 @@ onUnmounted(() => {
   background-repeat: no-repeat;
 }
 
+/* 悬浮模式时隐藏 viewport-root 的背景 */
+.viewport-root.floating-root {
+  background: transparent !important;
+  background-image: none !important;
+}
+
 .pet-container {
   --ui-bg: rgba(134, 212, 152, 0.88);
   --ui-bg-hover: rgba(141, 200, 157, 0.93);
@@ -252,14 +299,10 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   align-items: center;
-  background-image: url('./assets/initial_background.png');
-  background-size: cover;
-  background-position: center;
   color: white;
   border-radius: 20px;
   font-family: "华文中宋", "Microsoft YaHei", "黑体", sans-serif;
   font-size: 15px;
-  overflow: hidden;
   transform-origin: center center;
 }
 
@@ -268,6 +311,30 @@ onUnmounted(() => {
   font-weight: 900;
 }
 
+/* 悬浮模式下：透明背景，自适应内容，允许滚动条 */
+.pet-container.floating-mode {
+  position: relative;
+  top: 0;
+  left: 0;
+  transform: none !important;
+  background: transparent !important;
+  background-image: none !important;
+  width: auto !important;
+  height: auto !important;
+  overflow: visible;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 20px;
+  border-radius: 0;
+}
+
+.pet-container.floating-mode .pet-area {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+/* 自定义窗口按钮 */
 .window-controls {
   position: absolute;
   top: 14px;
@@ -357,14 +424,14 @@ onUnmounted(() => {
   height: 78px;
   display: flex;
   align-items: center;
-  pointer-events: none;
+  cursor: pointer;
 }
 
 .stats-title {
   font-size: 25px;
   font-weight: 400;
   color: #f3efe5;
-  letter-spacing: px;
+  letter-spacing: 1px;
   text-shadow: 0 2px 3px rgba(40, 32, 18, 0.3);
 }
 
@@ -378,7 +445,6 @@ onUnmounted(() => {
   color: #4a3f2f;
 }
 
-/* 进度条样式 */
 .progress-bar {
   display: flex;
   gap: 4px;
@@ -410,7 +476,8 @@ onUnmounted(() => {
   color: #4a3f2f;
   font-size: 18px;
 }
-/* 状态栏样式（青黛国风） */
+
+/* 状态栏 */
 .status-bar {
   position: absolute;
   top: 22px;
@@ -443,7 +510,6 @@ onUnmounted(() => {
   transform: translateY(-4px);
 }
 
-/* 宠物区域 */
 .pet-area {
   position: absolute;
   inset: 0;
@@ -476,14 +542,13 @@ onUnmounted(() => {
   pointer-events: auto;
 }
 
-/* 宠物图片（你的优化效果：鼠标放大） */
 .cat-image {
   width: 250px;
   filter: drop-shadow(0px 10px 10px rgba(0,0,0,0.5));
   transition: transform 0.2s;
 }
 .cat-image:hover {
-  transform: scale(1.1); /* 鼠标悬浮放大 */
+  transform: scale(1.1);
 }
 .plant-image {
   width: 95px;
@@ -491,7 +556,7 @@ onUnmounted(() => {
   margin-bottom: 8px;
 }
 
-/* 按钮面板（你的优化大按钮样式） */
+/* 操作按钮区 */
 .action-panel {
   position: absolute; 
   top: 30px;
@@ -512,7 +577,6 @@ onUnmounted(() => {
   transition: transform 0.12s ease, filter 0.12s ease;
 }
 
-/* 只改这里就能单独调整两个新按钮尺寸 */
 .image-btn-settings {
   width: 150px;
   margin-right: 0px;
@@ -541,5 +605,17 @@ onUnmounted(() => {
 .image-btn:active {
   filter: brightness(0.98);
   transform: translateY(2px);
+}
+</style>
+
+<style>
+/* 悬浮时全局透明 */
+html.floating,
+body.floating {
+  background: transparent !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
 }
 </style>

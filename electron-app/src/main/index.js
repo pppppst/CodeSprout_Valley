@@ -3,47 +3,24 @@ import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 
+// === 来自 new_ui_4_27 的设计尺寸 ===
 const DESIGN_WIDTH = 1365
 const DESIGN_HEIGHT = 768
+
+// === 来自 main 的全局变量，确保整个主进程可访问 ===
+let mainWindow
+let floatingWindow
 let tray = null
 
-function getMainWindow() {
-  return BrowserWindow.getAllWindows()[0] ?? null
-}
-
-function showMainWindow() {
-  const mainWindow = getMainWindow()
-  if (!mainWindow) return
-  if (mainWindow.isMinimized()) mainWindow.restore()
-  mainWindow.show()
-  mainWindow.focus()
-}
-
-function createTray() {
-  if (tray) return
-
-  tray = new Tray(icon)
-  tray.setToolTip('CodeSprout Valley')
-  tray.setContextMenu(
-    Menu.buildFromTemplate([
-      { label: '显示主界面', click: () => showMainWindow() },
-      { type: 'separator' },
-      { label: '退出', click: () => app.quit() }
-    ])
-  )
-  tray.on('double-click', () => showMainWindow())
-}
-
-// 【关键修改 1】：把创建窗口的所有代码，包裹在 createWindow 函数里！
+/**
+ * 1. 创建常规主界面窗口
+ */
 function createWindow() {
-  const mainWindow = new BrowserWindow({
-    width: DESIGN_WIDTH,
+  mainWindow = new BrowserWindow({
+    width: DESIGN_WIDTH, // 使用新 UI 尺寸
     height: DESIGN_HEIGHT,
     show: false,
     autoHideMenuBar: true,
-    transparent: false, // 不允许背景透明
-    frame: false,      // 隐藏自带的标题栏（白框）
-    hasShadow: false,  // 去除阴影
     ...(process.platform === 'linux' ? { icon } : {}),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
@@ -51,11 +28,19 @@ function createWindow() {
     }
   })
 
-  // Lock resizing to the original UI ratio.
+  // Lock resizing to the original UI ratio (来自 new_ui_4_27)
   mainWindow.setAspectRatio(DESIGN_WIDTH / DESIGN_HEIGHT)
 
   mainWindow.on('ready-to-show', () => {
     mainWindow.show()
+  })
+
+  // 拦截点击系统原生“最小化”按钮的事件 (来自 main 悬浮窗逻辑)
+  mainWindow.on('minimize', (event) => {
+    event.preventDefault() // 阻止默认的最小化到任务栏动作
+    mainWindow.hide()      // 隐藏主窗口
+    createFloatingWindow() // 召唤悬浮窗
+    setupTray()            // 确保托盘图标存在
   })
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
@@ -63,17 +48,99 @@ function createWindow() {
     return { action: 'deny' }
   })
 
-  // HMR for renderer base on electron-vite cli.
+  // 加载渲染进程内容
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
   } else {
     mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
   }
-
-  createTray()
 }
 
-// 【关键修改 2】：等待 app 的 ready 事件触发
+/**
+ * 2. 创建独立的桌面悬浮窗 (来自 main)
+ * 实现无边框、背景透明、始终置顶
+ */
+function createFloatingWindow() {
+  if (floatingWindow) return // 避免重复创建
+
+  floatingWindow = new BrowserWindow({
+    width: 200,
+    height: 200,
+    transparent: true, // 允许透明背景
+    frame: false,      // 移除窗口边框
+    alwaysOnTop: true, // 始终置顶
+    resizable: false,
+    hasShadow: false,
+    webPreferences: {
+      preload: join(__dirname, '../preload/index.js'),
+      sandbox: false
+    }
+  })
+
+  // 通过 Hash 路由 #floating 告诉前端只渲染宠物组件
+  if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
+    floatingWindow.loadURL(`${process.env['ELECTRON_RENDERER_URL']}#floating`)
+  } else {
+    floatingWindow.loadFile(join(__dirname, '../renderer/index.html'), { hash: 'floating' })
+  }
+
+  floatingWindow.on('closed', () => {
+    floatingWindow = null
+  })
+}
+
+/**
+ * 3. 封装统一的恢复主界面逻辑 (来自 main)
+ * 供托盘右键、托盘左键、悬浮窗双击共用
+ */
+function restoreMainInterface() {
+  if (mainWindow) {
+    mainWindow.show()
+    if (mainWindow.isMinimized()) mainWindow.restore()
+    mainWindow.focus() // 确保窗口获取焦点，直接显示在最前面
+  }
+  if (floatingWindow) {
+    floatingWindow.close()
+  }
+  destroyTray()
+}
+
+/**
+ * 4. 设置系统托盘 (来自 main)
+ * 提供恢复主界面的入口
+ */
+function setupTray() {
+  if (tray) return
+
+  tray = new Tray(icon)
+  const contextMenu = Menu.buildFromTemplate([
+    {
+      label: '恢复主界面',
+      click: () => restoreMainInterface()
+    },
+    { type: 'separator' },
+    { label: '退出 CodeSprout Valley', click: () => app.quit() }
+  ])
+
+  tray.setToolTip('CodeSprout Valley 陪伴中')
+  tray.setContextMenu(contextMenu)
+
+  // 监听托盘左键点击事件，实现一键直达恢复主界面
+  tray.on('click', () => {
+    restoreMainInterface()
+  })
+}
+
+function destroyTray() {
+  if (tray) {
+    tray.destroy()
+    tray = null
+  }
+}
+
+// ============================================
+// 当 Electron 完成初始化后的生命周期逻辑
+// ============================================
 app.whenReady().then(() => {
   electronApp.setAppUserModelId('com.electron')
 
@@ -81,19 +148,32 @@ app.whenReady().then(() => {
     optimizer.watchWindowShortcuts(window)
   })
 
+  // === 合并的 IPC 通信逻辑 ===
+
+  // 1. 来自 new_ui_4_27 的自定义窗口控制 (适配了全局变量)
   ipcMain.on('ping', () => console.log('pong'))
   ipcMain.on('window:minimize', () => {
-    const mainWindow = getMainWindow()
-    if (mainWindow) mainWindow.minimize()
+    if (mainWindow) mainWindow.minimize() // 触发原生的 minimize 事件，进而打开悬浮窗
   })
   ipcMain.on('window:hideToTray', () => {
-    const mainWindow = getMainWindow()
     if (mainWindow) mainWindow.hide()
+    setupTray()
   })
   ipcMain.on('window:close', () => app.quit())
 
-  // 只有在这里（底层引擎就绪后），才能安全地调用函数创建窗口
+  // 启动程序，显示主界面
   createWindow()
+
+  // 2. 来自 main 的悬浮窗与托盘控制
+  ipcMain.on('enable-floating-mode', () => {
+    if (mainWindow) mainWindow.hide()
+    createFloatingWindow()
+    setupTray()
+  })
+
+  ipcMain.on('restore-main-ui', () => {
+    restoreMainInterface()
+  })
 
   app.on('activate', function () {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

@@ -1,16 +1,18 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
 
-// Custom APIs for renderer
+// 整合两套自定义 APIs 供渲染进程使用
 const api = {
+  // === 来自 new_ui_4_27：自定义标题栏的窗口控制 ===
   minimizeWindow: () => ipcRenderer.send('window:minimize'),
   hideToTray: () => ipcRenderer.send('window:hideToTray'),
-  closeWindow: () => ipcRenderer.send('window:close')
+  closeWindow: () => ipcRenderer.send('window:close'),
+
+  // === 来自 main：桌面宠物悬浮窗控制 ===
+  enableFloatingMode: () => ipcRenderer.send('enable-floating-mode'),
+  restoreMainUI: () => ipcRenderer.send('restore-main-ui')
 }
 
-// Use `contextBridge` APIs to expose Electron APIs to
-// renderer only if context isolation is enabled, otherwise
-// just add to the DOM global.
 if (process.contextIsolated) {
   try {
     contextBridge.exposeInMainWorld('electron', electronAPI)
