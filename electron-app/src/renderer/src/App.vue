@@ -135,6 +135,31 @@ const currentDate = computed(() => {
 
 const currentSolarTerm = computed(() => getSolarTerm(now.value))
 
+// ================= 动态背景逻辑 =================
+// 1. 建立节气中文到拼音的映射字典
+const solarTermMap = {
+  '立春': 'lichun', '雨水': 'yushui', '惊蛰': 'jingzhe', '春分': 'chunfen',
+  '清明': 'qingming', '谷雨': 'guyu', '立夏': 'lixia', '小满': 'xiaoman',
+  '芒种': 'mangzhong', '夏至': 'xiazhi', '小暑': 'xiaoshu', '大暑': 'dashu',
+  '立秋': 'liqiu', '处暑': 'chushu', '白露': 'bailu', '秋分': 'qiufen',
+  '寒露': 'hanlu', '霜降': 'shuangjiang', '立冬': 'lidong', '小雪': 'xiaoxue',
+  '大雪': 'daxue', '冬至': 'dongzhi', '小寒': 'xiaohan', '大寒': 'dahan'
+}
+
+// 2. 计算当前应该显示的背景图片路径
+const currentBgUrl = computed(() => {
+  const termName = currentSolarTerm.value; // 获取当前节气中文，如"立春"
+  const pinyin = solarTermMap[termName];
+  
+  if (pinyin) {
+    // Vite 环境下动态引入本地图片的标准写法
+    return new URL(`./assets/SolarTerm/${pinyin}.png`, import.meta.url).href;
+  }
+  
+  // 兜底方案：如果没匹配到，返回默认背景
+  return new URL('./assets/initial_background.png', import.meta.url).href;
+})
+
 // ================= 生命周期 =================
 onMounted(() => {
   checkHash()
@@ -161,7 +186,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="viewport-root" :class="{ 'floating-root': isFloatingMode }">
+  <div class="viewport-root" :class="{ 'floating-root': isFloatingMode }" :style="{ backgroundImage: `url(${currentBgUrl})` }">
     <div
       class="pet-container"
       :class="{ 'floating-mode': isFloatingMode }"
@@ -255,7 +280,6 @@ onBeforeUnmount(() => {
   height: 100vh;
   overflow: hidden;
   position: relative;
-  background-image: url('./assets/initial_background.png');
   background-size: cover;
   background-position: center;
   background-repeat: no-repeat;
