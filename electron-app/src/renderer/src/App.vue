@@ -1,5 +1,6 @@
 <script setup>
 import { ref, computed, watch, onMounted, onUnmounted, onBeforeUnmount } from 'vue'
+import { getActiveJieQi } from './utils/calendar'
 
 // ================= 悬浮窗模式判断 =================
 const isFloatingMode = ref(false)
@@ -117,31 +118,12 @@ function updateUiScale() {
   uiScale.value = Math.min(scaleX, scaleY)
 }
 
-const solarTermTable = [
-  [{ day: 6, name: '小寒' }, { day: 20, name: '大寒' }],
-  [{ day: 4, name: '立春' }, { day: 19, name: '雨水' }],
-  [{ day: 6, name: '惊蛰' }, { day: 21, name: '春分' }],
-  [{ day: 5, name: '清明' }, { day: 20, name: '谷雨' }],
-  [{ day: 6, name: '立夏' }, { day: 21, name: '小满' }],
-  [{ day: 6, name: '芒种' }, { day: 21, name: '夏至' }],
-  [{ day: 7, name: '小暑' }, { day: 23, name: '大暑' }],
-  [{ day: 7, name: '立秋' }, { day: 23, name: '处暑' }],
-  [{ day: 7, name: '白露' }, { day: 23, name: '秋分' }],
-  [{ day: 8, name: '寒露' }, { day: 23, name: '霜降' }],
-  [{ day: 7, name: '立冬' }, { day: 22, name: '小雪' }],
-  [{ day: 7, name: '大雪' }, { day: 22, name: '冬至' }]
-]
-
 function getSolarTerm(date) {
   const month = date.getMonth()
   const day = date.getDate()
-  const [first, second] = solarTermTable[month]
+  const year = date.getFullYear()
 
-  if (day >= second.day) return second.name
-  if (day >= first.day) return first.name
-
-  const prevMonth = (month + 11) % 12
-  return solarTermTable[prevMonth][1].name
+  return getActiveJieQi(year, month + 1, day)
 }
 
 const currentDate = computed(() => {
