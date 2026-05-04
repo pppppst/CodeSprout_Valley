@@ -5,6 +5,10 @@ import { getActiveJieQi } from './utils/calendar'
 // ================= 悬浮窗模式判断 =================
 const isFloatingMode = ref(false)
 
+const bubbleTop = computed(() => {
+  return isFloatingMode.value ? '60%' : '69%'
+})
+
 function checkHash() {
   isFloatingMode.value = window.location.hash === '#floating'
   if (isFloatingMode.value) {
@@ -239,11 +243,18 @@ onBeforeUnmount(() => {
       <div
         class="pet-area"
         style="-webkit-app-region: no-drag;"
-        @dblclick="handleRestore"
       >
-        <div class="bubble">{{ message }}</div>
+        <div
+          class="bubble"
+          :style="{ top: bubbleTop }"
+          @dblclick.stop="handleRestore"
+        >{{ message }}</div>
         <div class="characters">
-          <img class="cat-image" src="./assets/cat.png">
+          <img
+            class="cat-image"
+            src="./assets/cat.png"
+            :style="isFloatingMode ? '-webkit-app-region: drag; pointer-events: auto;' : ''"
+          />
           <img
             v-show="!isFloatingMode"
             class="plant-image"
@@ -335,9 +346,24 @@ onBeforeUnmount(() => {
   border-radius: 0;
 }
 
+.pet-container.floating-mode .bubble {
+  left: 27% !important;
+  top: 13% !important;               /* 可微调 */
+  transform: translate(-50%, -50%) !important;
+  -webkit-app-region: no-drag !important;
+}
+
+.pet-container.floating-mode .characters {
+  left: 27% !important;
+  top: 30% !important;
+  transform: translate(-50%, -50%) !important;
+}
+
 .pet-container.floating-mode .pet-area {
   position: relative;
   flex: 0 0 auto;
+  width: 280px;   /* 与窗口一致 */
+  height: 400px;
 }
 
 /* 自定义窗口按钮 */
@@ -525,7 +551,9 @@ onBeforeUnmount(() => {
 .bubble {
   position: absolute;
   left: 43%;
-  top: 69%;
+  /*top: 69%;*/
+  white-space: nowrap;
+  min-width: 120px;
   transform: translate(-50%, -50%);
   background: rgba(255, 255, 255, 0.95);
   color: #333;
