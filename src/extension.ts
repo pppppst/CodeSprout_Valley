@@ -1,30 +1,33 @@
 import * as vscode from 'vscode';
 
-let totalNewLines = 0;
+// 1. 引入你的回车统计 (假设你在里面写了 initCodeIncrementTracker 函数)
+import { initCodeIncrementTracker } from './trackers/codeIncrementTracker';
 
+// 2. 引入同伴的统计 (选择包含 Activate 和 Deactivate 的函数)
+import { activateCodePassTracker, deactivateCodePassTracker } from './trackers/codePassTracker';
+// 如果 errorReporterTracker 里也有类似的函数，就按照如下格式补充
+import { activateErrorReporterTracker } from './trackers/errorReporterTracker';
+import { activateCodingDurationTracker, deactivateCodingDurationTracker } from './trackers/codingDurationTracker';
+
+// 【插件启动时调用的核心函数】
 export function activate(context: vscode.ExtensionContext) {
-    vscode.window.showInformationMessage('CodeTracker 已启动回车统计版');
+    console.log('CS Valley 插件已全面启动！');
 
-    const disposable = vscode.workspace.onDidChangeTextDocument((event) => {
-        for (const change of event.contentChanges) {
-            const text = change.text;
+    // 启动你的回车统计功能
+    initCodeIncrementTracker(context);
 
-            //console.log('本次输入内容:', JSON.stringify(text));
+    // 启动同伴的通过次数统计功能
+    activateCodePassTracker(context);
+    
+    // 如果有其他的，也像这样启动：
+    activateErrorReporterTracker(context);
 
-            if (text.includes('\n')) {
-                const enterCount = (text.match(/\n/g) || []).length;
-                totalNewLines += enterCount;
-
-                console.log(`检测到回车 ${enterCount} 次，累计新增 ${totalNewLines} 行`);
-
-                vscode.window.showInformationMessage(
-                    `检测到回车 ${enterCount} 次，累计新增 ${totalNewLines} 行`
-                );
-            }
-        }
-    });
-
-    context.subscriptions.push(disposable);
+    activateCodingDurationTracker(context);
 }
 
-export function deactivate() {}
+// 【插件被关闭/卸载时调用的核心函数】
+export function deactivate(context: vscode.ExtensionContext) {
+    // 调用同伴写的清理与保存数据的函数
+    deactivateCodePassTracker(context);
+    deactivateCodingDurationTracker(context);
+}
