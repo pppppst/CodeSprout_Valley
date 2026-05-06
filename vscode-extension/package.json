@@ -6,6 +6,11 @@
   "engines": {
     "vscode": "^1.80.0"
   },
+  "publisher":"Cyber007",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/pppppst/codesprout_valley"
+  },
   "categories": [
     "Other"
   ],
