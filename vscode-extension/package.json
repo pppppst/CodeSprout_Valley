@@ -1,0 +1,74 @@
+{
+  "name": "codetracker",
+  "displayName": "Codetracker",
+  "description": "A VSCode extension to track and record your coding activity",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "publisher":"Cyber007",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/pppppst/codesprout_valley"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "csvalley.sendTestReport",
+        "title": "CS Valley: Send Test Report"
+      }
+    ],
+    "configuration": {
+      "title": "CS Valley Plugin Configuration",
+      "properties": {
+        "csvalley.electronPort": {
+          "type": "number",
+          "default": 3001,
+          "description": "Port number of the CS Valley Electron desktop application's local server.",
+          "markdownDescription": "The **port number** on `localhost` where the CS Valley Electron desktop application's local server is listening for activity reports. **Must match the port configured in your Electron app.**",
+          "scope": "user"
+        },
+        "csvalley.reportPath": {
+          "type": "string",
+          "default": "/activity-report",
+          "description": "HTTP POST endpoint path on the Electron app for activity reports.",
+          "markdownDescription": "The **HTTP POST path** on the Electron app's local server where activity reports should be sent. E.g., `/api/report`. **Must match the route configured in your Electron app.**",
+          "scope": "user"
+        },
+        "csvalley.reportThrottleMs": {
+          "type": "number",
+          "default": 3000,
+          "description": "General throttling interval for sending reports to the Electron app (in milliseconds).",
+          "markdownDescription": "The **general throttling interval** in milliseconds before activity reports are sent to the Electron app. This helps prevent overwhelming the local server with too many requests.",
+          "scope": "user"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile && npm run lint",
+    "lint": "eslint src",
+    "test": "vscode-test"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.80.0",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "20.x",
+    "eslint": "^8.0.0",
+    "@typescript-eslint/eslint-plugin": "^6.0.0",
+    "@typescript-eslint/parser": "^6.0.0",
+    "typescript": "^5.0.0",
+    "@vscode/test-cli": "^0.0.10",
+    "@vscode/test-electron": "^2.4.0"
+  }
+}
