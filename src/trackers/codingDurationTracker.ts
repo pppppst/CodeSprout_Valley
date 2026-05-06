@@ -119,7 +119,6 @@ function stopAccumulationAndReporting() {
 // --- 激活和停用函数 ---
 
 export function activateCodingDurationTracker(context: vscode.ExtensionContext) {
-    console.log('CS Valley Plugin: Activating Coding Duration Tracker.');
 
     // 初始化状态
     isCodingActive = false;
@@ -165,8 +164,6 @@ export function activateCodingDurationTracker(context: vscode.ExtensionContext) 
 
 // 注意：deactivate 函数需要 context 参数，因为在 extension.ts 中是这样调用的
 export function deactivateCodingDurationTracker(context: vscode.ExtensionContext) {
-    console.log('CS Valley Plugin: Deactivating Coding Duration Tracker.');
-
     // 清理所有防抖和定时器
     if (activityDebounceTimeout) {
         clearTimeout(activityDebounceTimeout);

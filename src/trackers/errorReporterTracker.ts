@@ -1,83 +1,118 @@
-// src/trackers/errorReporterTracker.ts (核心逻辑片段)
 import * as vscode from 'vscode';
 import { reportActivityToElectron } from '../reportService';
-import { isErrorSeverity } from '../utils/errorUtils';
-// 导入 codePassTracker 的处理函数
-import { handleDiagnosticChangeForCodePass } from './codePassTracker'; // <-- 关键导入
 
-let cumulativeErrorCountInSession = 0; // 新增：当前会话中，自上次上报后的错误增量
-const fileHadErrorBefore: Map<string, boolean> = new Map(); // Map<uri.toString(), boolean>
-let diagnosticDisposable: vscode.Disposable | undefined;
-let reportThrottleTimeout: NodeJS.Timeout | undefined;
-const REPORT_THROTTLE_MS = 3000; // 3秒节流
+// 会话累计报错次数
+let cumulativeErrorCountInSession = 0;
 
-// ... (activateErrorReporterTracker 和 deactivateErrorReporterTracker 的骨架)
+// 上报节流定时器
+let errorReportTimeout: NodeJS.Timeout | undefined;
+let passReportTimeout: NodeJS.Timeout | undefined;
 
-function onDiagnosticsChanged(e: vscode.DiagnosticChangeEvent) {
-    e.uris.forEach(uri => {
-        const uriStr = uri.toString();
-        const diagnosticsForUri = vscode.languages.getDiagnostics(uri);
-        const hasErrorsNow = diagnosticsForUri.some(isErrorSeverity);
+// 节流上报间隔 3秒
+const REPORT_THROTTLE_MS = 3000;
 
-        const hadErrorBefore = fileHadErrorBefore.get(uriStr) || false; // 默认首次为无错
+// 需要统计的代码后缀
+const CODE_EXTENSIONS = [
+    '.py', '.c', '.cpp', '.js', '.ts', '.java', '.go'
+];
 
-        if (!hadErrorBefore && hasErrorsNow) {
-            // 文件从无 Error 变为有 Error
-            cumulativeErrorCountInSession++; // 累加到增量计数器
-            console.log(`CS Valley Plugin: File ${uri.fsPath} entered error state. New error increment in session: ${cumulativeErrorCountInSession}`);
-            triggerReportErrorCount();
-        }
-        fileHadErrorBefore.set(uriStr, hasErrorsNow); // 更新文件状态
+/**
+ * 检测错误：
+ * 1. 所有语言：优先认红色 Error
+ * 2. Python：额外把【重要警告】当成错误（未定义变量/语法问题）
+ * 解决 Python 只报 Warning 不报错的问题
+ */
+function hasRedError(uri: vscode.Uri): boolean {
+  const diagnostics = vscode.languages.getDiagnostics(uri);
+  const isPythonFile = uri.fsPath.toLowerCase().endsWith('.py');
 
-        // !!! 调用 codePassTracker 的核心处理逻辑 !!!
-        handleDiagnosticChangeForCodePass(uri);
-    });
+  return diagnostics.some(d => {
+    // 1. 通用逻辑：如果是 Error 级别，直接判错
+    if (d.severity === vscode.DiagnosticSeverity.Error) return true;
+
+    // 2. Python 深度检测
+    if (isPythonFile) {
+      // 检查 Pylance/Pyright 的错误代码 (比字符串匹配稳得多)
+      // 常见代码参考：reportUndefinedVariable, reportInvalidSyntax, reportGeneralTypeIssues
+      const diagnosticCode = typeof d.code === 'object' ? d.code.value : d.code;
+      
+      const fatalPythonCodes = [
+        "reportUndefinedVariable",
+        "reportInvalidSyntax",
+        "reportOptionalMemberAccess", // 访问 None 对象的属性
+        "reportAttributeAccessIssue"
+      ];
+
+      if (fatalPythonCodes.includes(String(diagnosticCode))) return true;
+
+      // 3. 增强版关键词匹配 (针对一些不带 Code 的警告)
+      const msg = d.message.toLowerCase();
+      const fatalRegex = /(not defined|undefined|syntax|no attribute|cannot import|import error|unexpected indent)/;
+      
+      if (d.severity === vscode.DiagnosticSeverity.Warning && fatalRegex.test(msg)) {
+        return true;
+      }
+    }
+
+    return false;
+  });
 }
 
-function triggerReportErrorCount() {
-    if (reportThrottleTimeout) {
-        clearTimeout(reportThrottleTimeout);
-    }
-    reportThrottleTimeout = setTimeout(() => {
+/**
+ * 报错统一节流上报
+ */
+function triggerErrorReport() {
+    if (errorReportTimeout) clearTimeout(errorReportTimeout);
+    errorReportTimeout = setTimeout(() => {
         if (cumulativeErrorCountInSession > 0) {
-            // 只在有增量时才上报
-             console.log("代码报错量："+cumulativeErrorCountInSession);
+            console.log("报错增量：" + cumulativeErrorCountInSession);
             reportActivityToElectron({ errorCount: cumulativeErrorCountInSession });
-            cumulativeErrorCountInSession = 0; // 上报后重置增量计数器
+            cumulativeErrorCountInSession = 0;
         }
     }, REPORT_THROTTLE_MS);
 }
 
-export function activateErrorReporterTracker(context: vscode.ExtensionContext) {
-    console.log('CS Valley Plugin: Activating Error Reporter Tracker.');
-    // 不再从 context.workspaceState 加载 cumulativeErrorCount，因为我们现在追踪的是会话增量
-    cumulativeErrorCountInSession = 0; // 插件激活时重置增量计数
-
-    // fileHadErrorBefore 状态仍然需要加载和保存，用于判断“从无错到有错”的状态变迁
-    const savedFileHadErrorBefore = context.workspaceState.get<[string, boolean][]>('csvalley.fileHadErrorBefore', []);
-    fileHadErrorBefore.clear();
-    savedFileHadErrorBefore.forEach(([uri, status]) => fileHadErrorBefore.set(uri, status));
-    
-    vscode.workspace.textDocuments.forEach(doc => {
-        const uriStr = doc.uri.toString();
-        const diagnostics = vscode.languages.getDiagnostics(doc.uri);
-        const hasError = diagnostics.some(isErrorSeverity);
-        fileHadErrorBefore.set(uriStr, hasError);
-    });
-
-    diagnosticDisposable = vscode.languages.onDidChangeDiagnostics(onDiagnosticsChanged);
-    context.subscriptions.push(diagnosticDisposable);
+/**
+ * 通过统一节流上报
+ */
+function triggerPassReport() {
+    if (passReportTimeout) clearTimeout(passReportTimeout);
+    passReportTimeout = setTimeout(() => {
+        console.log("通过增量： 1");
+        reportActivityToElectron({ codePassed: 1 });
+    }, REPORT_THROTTLE_MS);
 }
 
-export function deactivateErrorReporterTracker(context: vscode.ExtensionContext) { // 注意：这里需要传入 context
-    console.log('CS Valley Plugin: Deactivating Error Reporter Tracker.');
-    if (diagnosticDisposable) {
-        diagnosticDisposable.dispose();
+/**
+ * 保存事件核心处理（已删除冷却）
+ */
+async function onDocumentSaved(doc: vscode.TextDocument) {
+    const uri = doc.uri;
+
+    // 非指定代码文件，不参与统计
+    const path = uri.fsPath.toLowerCase();
+    const isCode = CODE_EXTENSIONS.some(ext => path.endsWith(ext));
+    if (!isCode) {
+        return;
     }
-    if (reportThrottleTimeout) {
-        clearTimeout(reportThrottleTimeout);
+    // 关键：等待 800ms 左右，给 Python 插件留出生成红线的时间
+    await new Promise(resolve => setTimeout(resolve, 800));
+    // 判断是否有红错，二选一计数上报
+    if (hasRedError(uri)) {
+        cumulativeErrorCountInSession++;
+        triggerErrorReport();
+    } else {
+        triggerPassReport();
     }
-    // 保存 fileHadErrorBefore 状态
-    context.workspaceState.update('csvalley.fileHadErrorBefore', Array.from(fileHadErrorBefore.entries()));
-    // cumulativeErrorCountInSession 不需保存，因为它是一个会话增量
+}
+
+export function activateErrorReporterTracker(context: vscode.ExtensionContext) {
+    context.subscriptions.push(
+        vscode.workspace.onDidSaveTextDocument(onDocumentSaved)
+    );
+}
+
+export function deactivateErrorReporterTracker(context: vscode.ExtensionContext) {
+    if (errorReportTimeout) clearTimeout(errorReportTimeout);
+    if (passReportTimeout) clearTimeout(passReportTimeout);
 }
