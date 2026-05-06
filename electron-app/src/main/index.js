@@ -1,5 +1,6 @@
 import { app, shell, BrowserWindow, Menu, Tray, ipcMain } from 'electron'
 import { join } from 'path'
+import http from 'node:http'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 
@@ -11,6 +12,80 @@ const DESIGN_HEIGHT = 768
 let mainWindow
 let floatingWindow
 let tray = null
+let pluginBridgeServer = null
+let latestPluginActivity = {
+  codeAdded: 0,
+  errorCount: 0,
+  codePassed: 0,
+  codingDuration: 0,
+  timestamp: 0
+}
+
+function broadcastPluginActivity(payload) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('activity:update', payload)
+  }
+  if (floatingWindow && !floatingWindow.isDestroyed()) {
+    floatingWindow.webContents.send('activity:update', payload)
+  }
+}
+
+function startPluginBridgeServer() {
+  if (pluginBridgeServer) return
+
+  pluginBridgeServer = http.createServer((req, res) => {
+    if (req.method !== 'POST' || req.url !== '/activity-report') {
+      res.writeHead(404, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ ok: false, error: 'not found' }))
+      return
+    }
+
+    let body = ''
+    req.on('data', (chunk) => {
+      body += chunk
+      if (body.length > 1_000_000) {
+        req.destroy()
+      }
+    })
+
+    req.on('end', () => {
+      try {
+        const incoming = JSON.parse(body || '{}')
+
+        // 数值字段做累加（以便主进程维持一个当天累积快照），非数值字段直接覆盖
+        const numericKeys = ['codeAdded', 'errorCount', 'codePassed', 'codingDuration']
+        numericKeys.forEach((k) => {
+          if (typeof incoming[k] === 'number' && Number.isFinite(incoming[k])) {
+            latestPluginActivity[k] = (latestPluginActivity[k] || 0) + incoming[k]
+          }
+        })
+
+        // 合并其他字段（如果需要）并更新时间戳
+        latestPluginActivity = {
+          ...latestPluginActivity,
+          ...incoming,
+          timestamp: Date.now()
+        }
+
+        broadcastPluginActivity(latestPluginActivity)
+
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ ok: true }))
+      } catch {
+        res.writeHead(400, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ ok: false, error: 'invalid json' }))
+      }
+    })
+  })
+
+  pluginBridgeServer.on('error', (error) => {
+    console.error('[CS Valley] Plugin bridge server error:', error)
+  })
+
+  pluginBridgeServer.listen(3001, '127.0.0.1', () => {
+    console.log('[CS Valley] Plugin bridge server listening at http://127.0.0.1:3001/activity-report')
+  })
+}
 
 /**
  * 1. 创建常规主界面窗口
@@ -163,6 +238,7 @@ app.whenReady().then(() => {
 
   // 启动程序，显示主界面
   createWindow()
+  startPluginBridgeServer()
 
   // 2. 来自 main 的悬浮窗与托盘控制
   ipcMain.on('enable-floating-mode', () => {
@@ -173,6 +249,10 @@ app.whenReady().then(() => {
 
   ipcMain.on('restore-main-ui', () => {
     restoreMainInterface()
+  })
+
+  ipcMain.handle('activity:get-latest', () => {
+    return latestPluginActivity
   })
 
   app.on('activate', function () {
@@ -187,6 +267,11 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', () => {
+  if (pluginBridgeServer) {
+    pluginBridgeServer.close()
+    pluginBridgeServer = null
+  }
+
   if (tray) {
     tray.destroy()
     tray = null

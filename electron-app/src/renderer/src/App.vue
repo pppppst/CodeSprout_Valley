@@ -35,6 +35,34 @@ function handleRestore() {
 const codeLines = ref(150)
 const catExp = ref(0)
 const message = ref('🐱 睡觉中...')
+let offActivityUpdate = null
+const todayPassed = ref(0)
+const todayErrors = ref(0)
+
+function applyActivityUpdate(data) {
+  if (!data || typeof data !== 'object') return
+
+  if (typeof data.codeAdded === 'number' && Number.isFinite(data.codeAdded)) {
+    codeLines.value = Math.max(0, codeLines.value + data.codeAdded)
+  }
+
+  if (typeof data.codePassed === 'number' && Number.isFinite(data.codePassed) && data.codePassed > 0) {
+    catExp.value += data.codePassed * 5
+    todayPassed.value += data.codePassed
+    message.value = `✅ ${data.codePassed} 个文件通过检查，经验提升中...`
+    setTimeout(() => {
+      message.value = '🐱 睡觉中...'
+    }, 1800)
+  }
+
+  if (typeof data.errorCount === 'number' && Number.isFinite(data.errorCount) && data.errorCount > 0) {
+    todayErrors.value += data.errorCount
+    message.value = `⚠️ 发现 ${data.errorCount} 个新错误，快去看看吧！`
+    setTimeout(() => {
+      message.value = '🐱 睡觉中...'
+    }, 2200)
+  }
+}
 
 // 统计数据
 const feedCount = ref(0)
@@ -168,6 +196,20 @@ const currentBgUrl = computed(() => {
 onMounted(() => {
   checkHash()
   window.addEventListener('hashchange', onHashChange)
+
+  if (window.api?.onActivityUpdate) {
+    offActivityUpdate = window.api.onActivityUpdate((payload) => {
+      applyActivityUpdate(payload)
+    })
+  }
+
+  if (window.api?.getLatestActivity) {
+    window.api.getLatestActivity().then((payload) => {
+      applyActivityUpdate(payload)
+    }).catch((error) => {
+      console.error('[CS Valley] Failed to load latest activity:', error)
+    })
+  }
   
   updateUiScale()
   window.addEventListener('resize', updateUiScale)
@@ -179,6 +221,10 @@ onMounted(() => {
 
 onUnmounted(() => {
   window.removeEventListener('resize', updateUiScale)
+  if (offActivityUpdate) {
+    offActivityUpdate()
+    offActivityUpdate = null
+  }
   if (timerId) {
     clearInterval(timerId)
   }
@@ -198,13 +244,7 @@ onBeforeUnmount(() => {
       :style="isFloatingMode ? {} : { transform: `translate(-50%, -50%) scale(${uiScale})` }"
     >
 
-      <div v-show="!isFloatingMode" class="window-controls" style="-webkit-app-region: no-drag;">
-        <button class="window-btn window-btn-minimize" @click="minimizeWindow" aria-label="最小化">
-          <span class="minimize-glyph" aria-hidden="true"></span>
-        </button>
-        <button class="window-btn" @click="hideToTray" aria-label="隐藏到状态栏">T</button>
-        <button class="window-btn close" @click="closeWindow" aria-label="关闭">X</button>
-      </div>
+      <!-- 右上角圆形窗口控制已移除，保留键位和托盘控制通过其它 UI 入口 -->
     
       <div
         v-show="!isFloatingMode"
@@ -230,6 +270,8 @@ onBeforeUnmount(() => {
           <div class="stat-detail">
             <p>🍖 今日喂食: {{ feedCount }} 次</p>
             <p>💧 今日浇水: {{ waterCount }} 次</p>
+            <p>✅ 今日通过: {{ todayPassed }} 个</p>
+            <p>⚠️ 今日报错: {{ todayErrors }} 个</p>
             <p>🧺 剩余猫粮: {{ foodStock }}</p>
             <p>🚿 剩余水量: {{ waterStock }}</p>
           </div>
@@ -436,7 +478,7 @@ onBeforeUnmount(() => {
   left: 78%;
   transform: translateX(-50%);
   width: 310px;
-  height: 300px;
+  height: 400px;
   overflow: visible;
   transition: all 0.2s ease;
   background-image: url('./assets/stats-expanded.png');
@@ -469,7 +511,7 @@ onBeforeUnmount(() => {
 
 .stats-content {
   position: absolute;
-  top: 68px;
+  top: 87px;
   left: 48px;
   right: 60px;
   bottom: 76px;

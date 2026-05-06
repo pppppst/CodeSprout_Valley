@@ -10,7 +10,19 @@ const api = {
 
   // === 来自 main：桌面宠物悬浮窗控制 ===
   enableFloatingMode: () => ipcRenderer.send('enable-floating-mode'),
-  restoreMainUI: () => ipcRenderer.send('restore-main-ui')
+  restoreMainUI: () => ipcRenderer.send('restore-main-ui'),
+
+  // === 插件数据桥接：主进程 -> 渲染进程 ===
+  onActivityUpdate: (handler) => {
+    const listener = (_event, payload) => {
+      if (typeof handler === 'function') {
+        handler(payload)
+      }
+    }
+    ipcRenderer.on('activity:update', listener)
+    return () => ipcRenderer.removeListener('activity:update', listener)
+  },
+  getLatestActivity: () => ipcRenderer.invoke('activity:get-latest')
 }
 
 if (process.contextIsolated) {
