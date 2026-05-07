@@ -454,7 +454,12 @@ onBeforeUnmount(() => {
           @dblclick.stop="handleRestore"
         >{{ message }}</div>
         <div class="characters">
-          <img class="cat-image" src="./assets/cat.png">
+          <img
+            class="cat-image"
+            src="./assets/cat.png"
+            draggable="false"
+            :style="isFloatingMode ? '-webkit-app-region: drag; pointer-events: auto;' : ''"
+          />
           <img
             v-show="!isFloatingMode"
             class="plant-image"
@@ -558,6 +563,10 @@ onBeforeUnmount(() => {
   font-weight: 900;
 }
 
+.pet-container.floating-mode .cat-image:hover {
+  transform: none !important;
+}/*让悬浮窗里的猫不再放大*/
+
 .pet-container.floating-mode {
   position: relative;
   top: 0;
@@ -576,16 +585,19 @@ onBeforeUnmount(() => {
 }
 
 .pet-container.floating-mode .bubble {
-  left: 27% !important;
-  top: 13% !important;
+  left: 40% !important;
+  top: 30% !important; /*微调用*/ 
   transform: translate(-50%, -50%) !important;
   -webkit-app-region: no-drag !important;
+  z-index: 10 !important;          /* 提高层级 */
+  pointer-events: auto !important;/* 强制可点击 */
 }
 
 .pet-container.floating-mode .characters {
-  left: 27% !important;
-  top: 30% !important;
+  left: 53% !important;
+  top: 50% !important;
   transform: translate(-50%, -50%) !important;
+  z-index: 1 !important;           /* 放到气泡下层 */
 }
 
 .pet-container.floating-mode .pet-area {
