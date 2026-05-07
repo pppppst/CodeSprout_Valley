@@ -38,8 +38,20 @@ let offActivityUpdate = null
 const todayPassed = ref(0)
 const todayErrors = ref(0)
 
+const CODE_LINES_PER_REWARD = 50
+const RESOURCE_PER_REWARD = 20
+const WATER_COST = 20
+const MAX_WATERINGS_PER_TERM = 120
+const MAX_WATER_REWARDED_LINES = MAX_WATERINGS_PER_TERM * CODE_LINES_PER_REWARD
+const SANDBOX_CODE_LINES = 6000
+
+const plantWaterByTerm = ref({})
+const sandboxSnapshot = ref(null)
+const suppressResourceRewards = ref(false)
+
 function applyActivityUpdate(data) {
   if (!data || typeof data !== 'object') return
+  if (isSandboxActive.value) return
 
   if (typeof data.codeAdded === 'number' && Number.isFinite(data.codeAdded)) {
     codeLines.value = Math.max(0, codeLines.value + data.codeAdded)
@@ -78,8 +90,24 @@ function feedCat() {
 }
 
 function waterPlant() {
+  if (waterStock.value < WATER_COST) {
+    message.value = `🚿 水滴不足，浇水需要 ${WATER_COST} 份水滴！`
+    setTimeout(() => message.value = '🐱 睡觉中...', 2000)
+    return
+  }
+
   waterCount.value++
-  waterStock.value = Math.max(waterStock.value - 10, 0)
+  waterStock.value = Math.max(waterStock.value - WATER_COST, 0)
+
+  const termKey = currentTermPinyin.value
+  const currentWaterings = plantWaterByTerm.value[termKey] || 0
+  if (currentWaterings < MAX_WATERINGS_PER_TERM) {
+    plantWaterByTerm.value = {
+      ...plantWaterByTerm.value,
+      [termKey]: currentWaterings + 1
+    }
+  }
+
   message.value = '🌱 咕噜咕噜...水好甜！'
   setTimeout(() => message.value = '🐱 睡觉中...', 2000)
 }
@@ -116,18 +144,30 @@ function toggleStats() {
 }
 
 const activeGridCount = computed(() => {
-  return Math.min(Math.floor(codeLines.value / 100), 5)
+  return Math.min(Math.floor(codeLines.value / CODE_LINES_PER_REWARD), 5)
 })
 
-const highestRewardedThreshold = ref(activeGridCount.value)
+const rewardedCodeThreshold = computed(() => {
+  return Math.max(0, Math.floor(codeLines.value / CODE_LINES_PER_REWARD))
+})
 
-watch(activeGridCount, (newValue) => {
+const highestRewardedThreshold = ref(rewardedCodeThreshold.value)
+
+watch(rewardedCodeThreshold, (newValue) => {
+  if (suppressResourceRewards.value) return
+
   if (newValue > highestRewardedThreshold.value) {
-    const gainedThresholds = newValue - highestRewardedThreshold.value
-    const bonus = gainedThresholds * 20
+    const oldValue = highestRewardedThreshold.value
+    const gainedThresholds = newValue - oldValue
+    const bonus = gainedThresholds * RESOURCE_PER_REWARD
+    const maxWaterThreshold = Math.floor(MAX_WATER_REWARDED_LINES / CODE_LINES_PER_REWARD)
+    const gainedWaterThresholds = Math.max(
+      0,
+      Math.min(newValue, maxWaterThreshold) - Math.min(oldValue, maxWaterThreshold)
+    )
 
     foodStock.value += bonus
-    waterStock.value += bonus
+    waterStock.value += gainedWaterThresholds * RESOURCE_PER_REWARD
     highestRewardedThreshold.value = newValue
   }
 })
@@ -177,6 +217,92 @@ const effectiveDate = computed(() => {
   return isValidDateObj(candidate) ? candidate : now.value
 })
 
+function getRewardThresholdForLines(lines) {
+  return Math.max(0, Math.floor(lines / CODE_LINES_PER_REWARD))
+}
+
+function getSandboxResourceStock(lines) {
+  return getRewardThresholdForLines(lines) * RESOURCE_PER_REWARD
+}
+
+function getSandboxWaterStock(lines) {
+  const maxWaterThreshold = Math.floor(MAX_WATER_REWARDED_LINES / CODE_LINES_PER_REWARD)
+  return Math.min(getRewardThresholdForLines(lines), maxWaterThreshold) * RESOURCE_PER_REWARD
+}
+
+function clonePlantWaterState() {
+  return { ...plantWaterByTerm.value }
+}
+
+function captureCurrentState() {
+  return {
+    mockDateString: mockDateString.value,
+    codeLines: codeLines.value,
+    catExp: catExp.value,
+    todayPassed: todayPassed.value,
+    todayErrors: todayErrors.value,
+    feedCount: feedCount.value,
+    waterCount: waterCount.value,
+    foodStock: foodStock.value,
+    waterStock: waterStock.value,
+    highestRewardedThreshold: highestRewardedThreshold.value,
+    plantWaterByTerm: clonePlantWaterState()
+  }
+}
+
+function setCodeLinesWithoutRewards(lines) {
+  suppressResourceRewards.value = true
+  codeLines.value = lines
+  highestRewardedThreshold.value = getRewardThresholdForLines(lines)
+  nextTick(() => {
+    suppressResourceRewards.value = false
+  })
+}
+
+function getTermPinyinForDate(date) {
+  try {
+    const termName = (getSolarTerm(date) || '').trim()
+    return solarTermMap[termName] || DEFAULT_PLANT_TERM
+  } catch {
+    return DEFAULT_PLANT_TERM
+  }
+}
+
+function applySandboxState(date) {
+  const termKey = getTermPinyinForDate(date)
+
+  setCodeLinesWithoutRewards(SANDBOX_CODE_LINES)
+  foodStock.value = getSandboxResourceStock(SANDBOX_CODE_LINES)
+  waterStock.value = getSandboxWaterStock(SANDBOX_CODE_LINES)
+  feedCount.value = 0
+  waterCount.value = 0
+  todayPassed.value = 0
+  todayErrors.value = 0
+  plantWaterByTerm.value = {
+    [termKey]: 0
+  }
+}
+
+function restoreSnapshot(snapshot) {
+  if (!snapshot) return
+
+  mockDateString.value = snapshot.mockDateString
+  catExp.value = snapshot.catExp
+  todayPassed.value = snapshot.todayPassed
+  todayErrors.value = snapshot.todayErrors
+  feedCount.value = snapshot.feedCount
+  waterCount.value = snapshot.waterCount
+  foodStock.value = snapshot.foodStock
+  waterStock.value = snapshot.waterStock
+  plantWaterByTerm.value = { ...snapshot.plantWaterByTerm }
+  suppressResourceRewards.value = true
+  codeLines.value = snapshot.codeLines
+  highestRewardedThreshold.value = snapshot.highestRewardedThreshold
+  nextTick(() => {
+    suppressResourceRewards.value = false
+  })
+}
+
 function openTimeMachine() {
   const parsed = parseYmdString(mockDateString.value)
   const base = parsed ? makeLocalDate(parsed.y, parsed.m, parsed.d) : now.value
@@ -219,7 +345,13 @@ function applyTimeMachine() {
     return
   }
 
+  if (!sandboxSnapshot.value) {
+    sandboxSnapshot.value = captureCurrentState()
+  }
+
+  const sandboxDate = makeLocalDate(y, m, d)
   mockDateString.value = `${y}-${pad2(m)}-${pad2(d)}`
+  applySandboxState(sandboxDate)
   isTimeMachineOpen.value = false
   timeMachineError.value = ''
 
@@ -228,6 +360,8 @@ function applyTimeMachine() {
 }
 
 function exitTimeMachine() {
+  restoreSnapshot(sandboxSnapshot.value)
+  sandboxSnapshot.value = null
   mockDateString.value = null
   isTimeMachineOpen.value = false
 
@@ -286,6 +420,18 @@ const solarTermMap = {
   '大雪': 'daxue', '冬至': 'dongzhi', '小寒': 'xiaohan', '大寒': 'dahan'
 }
 
+const DEFAULT_PLANT_TERM = 'xiazhi'
+const DEFAULT_PLANT_STAGE = 1
+const plantImageModules = import.meta.glob('./assets/*/stage*.png', {
+  eager: true,
+  import: 'default'
+})
+
+const currentTermPinyin = computed(() => {
+  const termName = (currentSolarTerm.value || '').trim()
+  return solarTermMap[termName] || DEFAULT_PLANT_TERM
+})
+
 const currentBgUrl = computed(() => {
   const termName = (currentSolarTerm.value || '').trim();
   const pinyin = solarTermMap[termName];
@@ -296,7 +442,19 @@ const currentBgUrl = computed(() => {
   return new URL('./assets/initial_background.png', import.meta.url).href;
 })
 
-const plantStyleConfig = {
+function getPlantStageByWaterings(waterings) {
+  if (waterings >= 120) return 4
+  if (waterings >= 60) return 3
+  if (waterings >= 30) return 2
+  return 1
+}
+
+const currentPlantStage = computed(() => {
+  const waterings = plantWaterByTerm.value[currentTermPinyin.value] || 0
+  return getPlantStageByWaterings(waterings)
+})
+
+const plantImageConfig = {
   default: {
     width: '95px',
     left: '200px',
@@ -305,52 +463,73 @@ const plantStyleConfig = {
     transformOrigin: 'bottom center'
   },
   xiazhi: {
-    width: '100px',
-    left: '450px',
-    bottom: '160px',
-    transform: 'scale(5.5)', 
-    transformOrigin: 'bottom center'
+    default: {
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(5.5)', 
+      transformOrigin: 'bottom center'
+    },
+    stage1: {},
+    stage2: {},
+    stage3: {},
+    stage4: {}
   },
   lixia: {
-    width: '100px', 
-    left: '450px',
-    bottom: '160px',
-    transform: 'scale(4)',
-    transformOrigin: 'bottom center'
+    default: {
+      width: '100px', 
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(4)',
+      transformOrigin: 'bottom center'
+    },
+    stage1: {},
+    stage2: {},
+    stage3: {},
+    stage4: {}
   },
   lichun: {
-    width: '100px', 
-    left: '450px',
-    bottom: '160px',
-    transform: 'scale(4)',
-    transformOrigin: 'bottom center'
+    default: {
+      width: '100px', 
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(4)',
+      transformOrigin: 'bottom center'
+    },
+    stage1: {},
+    stage2: {},
+    stage3: {},
+    stage4: {}
   }
 }
 
-const currentPlant = computed(() => {
-  const termName = (currentSolarTerm.value || '').trim()
-  let pinyin = solarTermMap[termName] 
-  
-  if (!pinyin || !plantStyleConfig[pinyin]) {
-    pinyin = 'default'
+function getPlantImageUrl(termKey, stage) {
+  const imageKey = `./assets/${termKey}/stage${stage}.png`
+  const fallbackKey = `./assets/${DEFAULT_PLANT_TERM}/stage${DEFAULT_PLANT_STAGE}.png`
+
+  if (plantImageModules[imageKey]) {
+    return plantImageModules[imageKey]
   }
 
-  let imgSrc
-  try {
-    const imgPinyin = pinyin === 'default' ? 'xiazhi' : pinyin
-    imgSrc = new URL(`./assets/${imgPinyin}/stage6.png`, import.meta.url).href
-  } catch (e) {
-    imgSrc = new URL(`./assets/xiazhi/stage6.png`, import.meta.url).href
-  }
+  console.warn(`[CS Valley] Missing plant image: ${imageKey}, fallback to ${fallbackKey}`)
+  return plantImageModules[fallbackKey] || new URL('./assets/xiazhi/stage1.png', import.meta.url).href
+}
+
+const currentPlant = computed(() => {
+  const termKey = currentTermPinyin.value
+  const stage = currentPlantStage.value
+  const termConfig = plantImageConfig[termKey] || {}
+  const stageConfig = termConfig[`stage${stage}`] || {}
 
   const style = {
-    ...plantStyleConfig.default,
-    ...plantStyleConfig[pinyin]
+    ...plantImageConfig.default,
+    ...(termConfig.default || {}),
+    ...stageConfig
   }
 
   return {
-    src: imgSrc,
-    style: style
+    src: getPlantImageUrl(termKey, stage),
+    style
   }
 })
 
