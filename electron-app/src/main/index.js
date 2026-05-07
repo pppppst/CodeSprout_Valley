@@ -139,8 +139,8 @@ function createFloatingWindow() {
   if (floatingWindow) return // 避免重复创建
 
   floatingWindow = new BrowserWindow({
-    width: 200,
-    height: 200,
+    width: 280,
+    height: 400,
     transparent: true, // 允许透明背景
     frame: false,      // 移除窗口边框
     alwaysOnTop: true, // 始终置顶
