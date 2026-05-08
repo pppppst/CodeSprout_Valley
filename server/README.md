@@ -1,6 +1,17 @@
-# CS Valley 云端后端
-**主要功能：**
-- 提供用户登录/注册接口。
-- 接收并持久化存储来自插件和客户端的代码数据。
-- 计算二十四节气逻辑及图鉴结算。
-**技术栈：** Python, FastAPI, SQLAlchemy (SQLite)
+# CS Valley Cloud Server
+
+Express + MongoDB backend for account registration, login, authenticated save syncing, and save loading.
+
+## Required environment variables
+
+- `MONGO_URI`: MongoDB connection string.
+- `JWT_SECRET`: secret used to sign login tokens.
+- `PORT`: optional, defaults to `3000`.
+
+## API
+
+- `POST /api/register`
+- `POST /api/login`
+- `POST /api/sync` with `Authorization: Bearer <token>`
+- `GET /api/user/me` with `Authorization: Bearer <token>`
+- `GET /api/user/:username` with `Authorization: Bearer <token>`
