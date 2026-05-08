@@ -1,3 +1,4 @@
+/* eslint-disable no-unused-vars, no-undef */
 // 找到这部分代码并修改对应的值，没有的属性就加上
 const mainWindow = new BrowserWindow({
   width: 1440,        // 悬浮窗不需要太大，改成 300

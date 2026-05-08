@@ -1,174 +1,139 @@
 <script setup>
 import { ref, computed, watch, onMounted, onUnmounted, onBeforeUnmount, nextTick } from 'vue'
 import { getActiveJieQi } from './utils/calendar'
+import { registerAccount, loginAccount, fetchCloudSave, syncCloudSave } from './utils/cloudApi'
 import WeatherEffect from './components/WeatherEffect.vue'
 import { SolarUtil } from 'lunar-javascript'
 
 const isFloatingMode = ref(false)
 
-// ==========================================
-// 🚀 云同步与认证测试模块 (无损追加)
-// ==========================================
-const API_BASE = 'http://120.25.247.9:3000'; 
+const authUsername = ref('')
+const authPassword = ref('')
+const authStatusMessage = ref('等待登录后同步云端存档')
+const cloudToken = ref(localStorage.getItem('codeSproutToken') || '')
+const loggedInUser = ref(localStorage.getItem('codeSproutUser') || '')
+const isCloudBusy = ref(false)
+const lastSyncTime = ref(localStorage.getItem('codeSproutLastSyncTime') || '')
+const isReportOpen = ref(false)
 
-// 1. 修复后的云同步逻辑（彻底告别 alert）
-const testCloudSync = async () => {
-  console.log('⏳ 准备开始云端同步...');
+function setAuthSession(token, username) {
+  cloudToken.value = token
+  loggedInUser.value = username
+  localStorage.setItem('codeSproutToken', token)
+  localStorage.setItem('codeSproutUser', username)
+}
 
-  const currentUser = localStorage.getItem('codeSproutUser');
+function clearAuthSession() {
+  cloudToken.value = ''
+  loggedInUser.value = ''
+  lastSyncTime.value = ''
+  localStorage.removeItem('codeSproutToken')
+  localStorage.removeItem('codeSproutUser')
+  localStorage.removeItem('codeSproutLastSyncTime')
+}
 
-  // 🌟 修复点 1：不弹窗，直接在面板上亮红灯！
-  if (!currentUser) {
-    authStatusMessage.value = '⚠️ 同步失败：请先登录或注册账号！';
-    return;
+function applyCloudSave(save) {
+  if (!save) return
+
+  const totalCodeLines = Number(save.totalCodeLines || 0)
+  codeLines.value = totalCodeLines
+  syncedCodeLines.value = totalCodeLines
+  foodStock.value = Number(save.catFood || 0)
+  waterStock.value = Number(save.waterDrops || 0)
+
+  if (save.lastSyncTime) {
+    lastSyncTime.value = new Date(save.lastSyncTime).toLocaleString()
+    localStorage.setItem('codeSproutLastSyncTime', lastSyncTime.value)
+  }
+}
+
+async function loadCloudSave() {
+  if (!cloudToken.value) return
+
+  const result = await fetchCloudSave(cloudToken.value)
+  applyCloudSave(result.data)
+}
+
+async function handleRegister() {
+  if (!authUsername.value.trim() || !authPassword.value) {
+    authStatusMessage.value = '用户名和密码不能为空'
+    return
   }
 
-  authStatusMessage.value = '🚀 正在向云端注入数据...';
-  const linesToSync = Math.max(0, codeLines.value - syncedCodeLines.value);
+  isCloudBusy.value = true
+  authStatusMessage.value = '正在注册账号...'
+  try {
+    await registerAccount(authUsername.value.trim(), authPassword.value)
+    authStatusMessage.value = '注册成功，请点击登录'
+  } catch (error) {
+    authStatusMessage.value = `注册失败：${error.message}`
+  } finally {
+    isCloudBusy.value = false
+  }
+}
 
-  const syncPayload = {
-    username: currentUser, 
+async function handleLogin() {
+  if (!authUsername.value.trim() || !authPassword.value) {
+    authStatusMessage.value = '用户名和密码不能为空'
+    return
+  }
+
+  isCloudBusy.value = true
+  authStatusMessage.value = '正在登录并拉取云端存档...'
+  try {
+    const result = await loginAccount(authUsername.value.trim(), authPassword.value)
+    setAuthSession(result.token, result.username)
+    applyCloudSave(result.data)
+    await loadCloudSave()
+    authStatusMessage.value = '登录成功，云端存档已加载'
+  } catch (error) {
+    clearAuthSession()
+    authStatusMessage.value = `登录失败：${error.message}`
+  } finally {
+    isCloudBusy.value = false
+  }
+}
+
+async function handleCloudSync() {
+  if (!cloudToken.value) {
+    authStatusMessage.value = '请先登录账号再同步'
+    return
+  }
+
+  const linesToSync = Math.max(0, codeLines.value - syncedCodeLines.value)
+  const payload = {
     addedLines: linesToSync,
     catFood: foodStock.value,
     waterDrops: waterStock.value,
-    plantStage: 'sprout'
-  };
+    plantStage: currentPlantStage.value
+  }
 
+  isCloudBusy.value = true
+  authStatusMessage.value = '正在同步云端存档...'
   try {
-    const response = await fetch(`${API_BASE}/api/sync`, { 
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(syncPayload)
-    });
-
-    const result = await response.json();
-    if (result.success) {
-      console.log('✅ 同步成功！最新存档：', result.data);
-      syncedCodeLines.value = codeLines.value; 
-      // 🌟 修复点 2：同步成功也在面板上绿灯提示
-      authStatusMessage.value = `✅ 同步完成！注入了 ${linesToSync} 行代码。`; 
-    } else {
-      authStatusMessage.value = '❌ 数据异常：' + result.message;
-    }
+    const result = await syncCloudSave(cloudToken.value, payload)
+    applyCloudSave(result.data)
+    authStatusMessage.value = `同步完成，本次新增 ${linesToSync} 行代码`
   } catch (error) {
-    console.error('❌ 无法连接到服务器:', error);
-    authStatusMessage.value = '⚠️ 当前处于离线模式，无法同步。';
-  }
-};
-
-// ==========================================
-// 2. 新增的注册登录测试逻辑 (带状态管理)
-// ==========================================
-const authUsername = ref('');
-const authPassword = ref('');
-const authStatusMessage = ref('等待操作...');
-
-// 🌟 新增：让 Vue 实时盯着备忘录，看看当前到底是谁登录了
-const loggedInUser = ref(localStorage.getItem('codeSproutUser') || '');
-
-const testRegister = async () => {
-  if (!authUsername.value || !authPassword.value) {
-    authStatusMessage.value = '⚠️ 用户名和密码不能为空哦！';
-    return;
-  }
-  authStatusMessage.value = '正在向云端发送注册请求...';
-  try {
-    const response = await fetch(`${API_BASE}/api/register`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username: authUsername.value, password: authPassword.value })
-    });
-    const data = await response.json();
-    if (data.success) {
-      authStatusMessage.value = `✅ 注册成功！请点击登录。`;
-    } else {
-      authStatusMessage.value = `❌ 注册失败: ${data.message}`;
+    if (error.status === 401) {
+      clearAuthSession()
     }
-  } catch (error) {
-    authStatusMessage.value = `⚠️ 网络错误: ${error.message}`;
+    authStatusMessage.value = `同步失败：${error.message}`
+  } finally {
+    isCloudBusy.value = false
   }
-};
+}
 
-// ==========================================
-// 📥 新增：向云端索要并覆盖本地存档的函数
-// ==========================================
-const fetchUserData = async (username) => {
-  try {
-    const response = await fetch(`${API_BASE}/api/user/${username}`);
-    const result = await response.json();
-    
-    if (result.success) {
-      // 🌟 核心替换：把云端的真实数据，无缝覆盖到 Vue 界面的变量上！
-      codeLines.value = result.data.totalCodeLines;
-      syncedCodeLines.value = result.data.totalCodeLines; // 刚读的档，所以已同步行数等于总行数
-      foodStock.value = result.data.catFood;
-      waterStock.value = result.data.waterDrops;
-      
-      console.log('📥 云端存档拉取成功并已覆盖本地界面！', result.data);
-    }
-  } catch (error) {
-    console.error('拉取存档网络错误:', error);
-  }
-};
-
-// ==========================================
-// 🔑 登录逻辑 (集成读档)
-// ==========================================
-const testLogin = async () => {
-  if (!authUsername.value || !authPassword.value) {
-    authStatusMessage.value = '⚠️ 用户名和密码不能为空哦！';
-    return;
-  }
-  authStatusMessage.value = '正在验证身份...';
-  try {
-    const response = await fetch(`${API_BASE}/api/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username: authUsername.value, password: authPassword.value })
-    });
-    const data = await response.json();
-    if (data.success) {
-      // 1. 登录成功，写备忘录
-      localStorage.setItem('codeSproutToken', data.token);
-      localStorage.setItem('codeSproutUser', data.username);
-      
-      // 2. 界面更新为登录状态
-      loggedInUser.value = data.username;
-      authStatusMessage.value = `✅ 登录成功！正在拉取云端存档...`;
-      
-      // 3. 🌟 触发读档魔法，拉取最新数据覆盖界面！
-      await fetchUserData(data.username);
-      
-      authStatusMessage.value = `✅ 登录成功！存档已完全同步。`;
-    } else {
-      authStatusMessage.value = `❌ 登录拒绝: ${data.message}`;
-    }
-  } catch (error) {
-    authStatusMessage.value = `⚠️ 网络错误: ${error.message}`;
-  }
-};
-
-// ==========================================
-// 🚪 退出登录 (清空备忘录与界面数据)
-// ==========================================
-const testLogout = () => {
-  // 1. 撕掉备忘录
-  localStorage.removeItem('codeSproutToken');
-  localStorage.removeItem('codeSproutUser');
-  
-  // 2. 重置面板输入框状态
-  loggedInUser.value = '';
-  authUsername.value = '';
-  authPassword.value = '';
-  authStatusMessage.value = '🚪 已安全退出登录，备忘录已清空。';
-  
-  // 3. 🌟 新增修复：退出账号时，把本地的展示数据全部打回原型（清零）
-  codeLines.value = 0;
-  syncedCodeLines.value = 0;
-  foodStock.value = 0;
-  waterStock.value = 0;
-};
-// ==========================================
+function handleLogout() {
+  clearAuthSession()
+  authUsername.value = ''
+  authPassword.value = ''
+  codeLines.value = 0
+  syncedCodeLines.value = 0
+  foodStock.value = 0
+  waterStock.value = 0
+  authStatusMessage.value = '已退出登录，本地账号状态已清空'
+}
 
 
 const bubbleTop = computed(() => {
@@ -289,8 +254,13 @@ function openSettings() {
 }
 
 function openWeeklyReport() {
-  message.value = '🗞️ 正在打开节气周报...'
+  isReportOpen.value = true
+  message.value = '节气周报已生成'
   setTimeout(() => message.value = '🐱 睡觉中...', 2000)
+}
+
+function closeWeeklyReport() {
+  isReportOpen.value = false
 }
 
 function toggleStats() {
@@ -602,6 +572,30 @@ const currentPlantStage = computed(() => {
   return getPlantStageByWaterings(waterings)
 })
 
+const weeklyReport = computed(() => {
+  const totalActions = feedCount.value + waterCount.value
+  const totalChecks = todayPassed.value + todayErrors.value
+  const passRate = totalChecks === 0
+    ? '暂无检测记录'
+    : `${Math.round((todayPassed.value / totalChecks) * 100)}%`
+
+  return {
+    title: `${currentSolarTerm.value || '当前节气'}成长报告`,
+    date: currentDate.value,
+    owner: loggedInUser.value || '本地用户',
+    totalCodeLines: codeLines.value,
+    todayPassed: todayPassed.value,
+    todayErrors: todayErrors.value,
+    passRate,
+    totalActions,
+    plantStage: currentPlantStage.value,
+    syncText: lastSyncTime.value ? `最近同步：${lastSyncTime.value}` : '尚未完成云端同步',
+    summary: totalActions > 0
+      ? `本节气已照料 ${totalActions} 次，植物成长到第 ${currentPlantStage.value} 阶段。`
+      : `本节气植物处于第 ${currentPlantStage.value} 阶段，继续写代码和照料即可推进成长。`
+  }
+})
+
 const plantImageConfig = {
   default: {
     width: '95px',
@@ -698,6 +692,17 @@ onMounted(() => {
       console.error('[CS Valley] Failed to load latest activity:', error)
     })
   }
+
+  if (cloudToken.value) {
+    loadCloudSave()
+      .then(() => {
+        authStatusMessage.value = '已恢复登录状态，云端存档已加载'
+      })
+      .catch((error) => {
+        clearAuthSession()
+        authStatusMessage.value = `登录状态失效：${error.message}`
+      })
+  }
   
   updateUiScale()
   window.addEventListener('resize', updateUiScale)
@@ -724,38 +729,28 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <button @click="testCloudSync" style="position: absolute; top: 20px; left: 20px; z-index: 9999; padding: 10px; background: #4CAF50; color: white; border-radius: 5px; cursor: pointer; border: none; font-weight: bold; box-shadow: 0 2px 5px rgba(0,0,0,0.2);">
-  🚀 测试数据云同步
-  </button>
+  <div v-show="!isFloatingMode" class="cloud-panel" style="-webkit-app-region: no-drag;">
+    <div class="cloud-panel-title">云端账号</div>
 
-  <div v-show="!isFloatingMode" style="position: absolute; top: 75px; left: 20px; z-index: 9999; padding: 15px; background: rgba(255, 255, 255, 0.95); border-radius: 10px; box-shadow: 0 4px 15px rgba(0,0,0,0.2); width: 260px; font-family: sans-serif; color: #333; backdrop-filter: blur(5px); -webkit-app-region: no-drag;">
-    <h3 style="margin: 0 0 12px 0; font-size: 16px; color: #4CAF50; display: flex; align-items: center; gap: 5px;">
-      <span>🔐</span> 云端账号测试区
-    </h3>
-    
-    <div v-if="loggedInUser">
-      <div style="margin-bottom: 12px; padding: 10px; background: #e8f5e9; border-radius: 5px;">
-        <p style="margin: 0 0 10px 0; font-size: 14px; color: #2e7d32;">当前登录：<strong>{{ loggedInUser }}</strong></p>
-        <button @click="testLogout" style="width: 100%; padding: 8px; cursor: pointer; background: #f44336; color: white; border: none; border-radius: 5px; font-weight: bold; transition: opacity 0.2s;">🚪 退出登录</button>
+    <div v-if="loggedInUser" class="cloud-user-card">
+      <div class="cloud-user-name">{{ loggedInUser }}</div>
+      <div class="cloud-user-meta">{{ lastSyncTime ? `最近同步：${lastSyncTime}` : '' }}</div>
+      <div class="cloud-actions">
+        <button class="cloud-btn primary" :disabled="isCloudBusy" @click="handleCloudSync">同步</button>
+        <button class="cloud-btn danger" :disabled="isCloudBusy" @click="handleLogout">退出</button>
       </div>
     </div>
 
-    <div v-else>
-      <div style="display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px;">
-        <input v-model="authUsername" placeholder="起个响亮的用户名" style="padding: 8px; border: 1px solid #ddd; border-radius: 5px; outline: none;" />
-        <input v-model="authPassword" type="password" placeholder="输入密码" style="padding: 8px; border: 1px solid #ddd; border-radius: 5px; outline: none;" />
-      </div>
-      <div style="display: flex; gap: 8px; margin-bottom: 12px;">
-        <button @click="testRegister" style="flex: 1; padding: 8px; cursor: pointer; background: #2196F3; color: white; border: none; border-radius: 5px; font-weight: bold;">📝 注册</button>
-        <button @click="testLogin" style="flex: 1; padding: 8px; cursor: pointer; background: #FF9800; color: white; border: none; border-radius: 5px; font-weight: bold;">🔑 登录</button>
+    <div v-else class="cloud-login-form">
+      <input v-model.trim="authUsername" class="cloud-input" placeholder="用户名" />
+      <input v-model="authPassword" class="cloud-input" type="password" placeholder="密码（至少 6 位）" />
+      <div class="cloud-actions">
+        <button class="cloud-btn secondary" :disabled="isCloudBusy" @click="handleRegister">注册</button>
+        <button class="cloud-btn primary" :disabled="isCloudBusy" @click="handleLogin">登录</button>
       </div>
     </div>
 
-    <div style="font-size: 13px; padding: 8px; background: #f5f5f5; border-radius: 5px; word-break: break-all; min-height: 20px; border-left: 3px solid #ccc;" :style="{ borderLeftColor: authStatusMessage.includes('❌') || authStatusMessage.includes('⚠️') ? '#f44336' : (authStatusMessage.includes('✅') ? '#4CAF50' : '#ccc') }">
-      <span :style="{ color: authStatusMessage.includes('❌') || authStatusMessage.includes('⚠️') ? '#d32f2f' : (authStatusMessage.includes('✅') ? '#388e3c' : '#666') }">
-        {{ authStatusMessage }}
-      </span>
-    </div>
+    <div class="cloud-status">{{ authStatusMessage }}</div>
   </div>
   <div class="viewport-root" :class="{ 'floating-root': isFloatingMode }" :style="{ backgroundImage: `url(${currentBgUrl})` }">
     <WeatherEffect v-show="!isFloatingMode" :type="currentWeatherType" />
@@ -850,6 +845,36 @@ onBeforeUnmount(() => {
       </div>
 
       <div
+        v-if="isReportOpen && !isFloatingMode"
+        class="report-mask"
+        style="-webkit-app-region: no-drag;"
+        @click.self="closeWeeklyReport"
+      >
+        <section class="report-panel">
+          <div class="report-header">
+            <div>
+              <p class="report-date">{{ weeklyReport.date }}</p>
+              <h2>{{ weeklyReport.title }}</h2>
+            </div>
+            <button class="report-close" @click="closeWeeklyReport">×</button>
+          </div>
+
+          <p class="report-summary">{{ weeklyReport.summary }}</p>
+
+          <div class="report-grid">
+            <div class="report-item"><span>累计代码</span><strong>{{ weeklyReport.totalCodeLines }}</strong></div>
+            <div class="report-item"><span>通过率</span><strong>{{ weeklyReport.passRate }}</strong></div>
+            <div class="report-item"><span>今日通过</span><strong>{{ weeklyReport.todayPassed }}</strong></div>
+            <div class="report-item"><span>今日报错</span><strong>{{ weeklyReport.todayErrors }}</strong></div>
+            <div class="report-item"><span>照料次数</span><strong>{{ weeklyReport.totalActions }}</strong></div>
+            <div class="report-item"><span>植物阶段</span><strong>{{ weeklyReport.plantStage }}</strong></div>
+          </div>
+
+          <div class="report-footer"><span>{{ weeklyReport.owner }}</span><span>{{ weeklyReport.syncText }}</span></div>
+        </section>
+      </div>
+
+      <div
         v-if="isTimeMachineOpen && !isFloatingMode"
         class="time-machine-mask"
         style="-webkit-app-region: no-drag;"
@@ -895,6 +920,34 @@ onBeforeUnmount(() => {
   background: transparent !important;
   background-image: none !important;
 }
+
+.cloud-panel {
+  position: absolute;
+  top: 24px;
+  left: 24px;
+  z-index: 9999;
+  width: 270px;
+  padding: 14px;
+  color: #3f4a38;
+  background: rgba(250, 252, 242, 0.94);
+  border: 1px solid rgba(87, 124, 87, 0.28);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(45, 58, 39, 0.18);
+  font-family: "Microsoft YaHei", sans-serif;
+}
+
+.cloud-panel-title { margin-bottom: 10px; color: #3f6d4a; font-size: 16px; }
+.cloud-login-form, .cloud-user-card { display: grid; gap: 8px; }
+.cloud-input { width: 100%; box-sizing: border-box; padding: 8px 10px; border: 1px solid rgba(88, 117, 93, 0.38); border-radius: 6px; color: #344235; background: rgba(255, 255, 255, 0.86); outline: none; }
+.cloud-user-name { font-size: 15px; color: #2f5d3a; }
+.cloud-user-meta { min-height: 16px; color: #6b7568; font-size: 12px; }
+.cloud-actions { display: flex; gap: 8px; }
+.cloud-btn { flex: 1; padding: 8px 10px; border: 0; border-radius: 6px; color: white; cursor: pointer; }
+.cloud-btn:disabled { cursor: wait; opacity: 0.6; }
+.cloud-btn.primary { background: #4f8f5f; }
+.cloud-btn.secondary { background: #5b87b4; }
+.cloud-btn.danger { background: #b75b54; }
+.cloud-status { margin-top: 10px; padding: 8px; border-left: 3px solid #7ea56d; border-radius: 6px; background: rgba(239, 244, 229, 0.86); color: #4d5a45; font-size: 12px; line-height: 1.4; }
 
 .pet-container {
   --ui-bg: rgba(134, 212, 152, 0.88);
@@ -1252,6 +1305,19 @@ onBeforeUnmount(() => {
   filter: brightness(0.98);
   transform: translateY(2px);
 }
+
+.report-mask { position: absolute; inset: 0; z-index: 12; display: flex; align-items: center; justify-content: center; background: rgba(40, 32, 18, 0.28); pointer-events: auto; }
+.report-panel { width: 560px; padding: 22px; border: 1px solid rgba(84, 78, 62, 0.4); border-radius: 8px; background: rgba(253, 250, 240, 0.96); color: #4e4230; box-shadow: 0 18px 42px rgba(44, 36, 20, 0.22); }
+.report-header { display: flex; justify-content: space-between; gap: 16px; }
+.report-header h2 { margin: 3px 0 0; font-size: 24px; color: #3f6d4a; }
+.report-date { margin: 0; color: #7a6c55; font-size: 13px; }
+.report-close { width: 32px; height: 32px; border: 0; border-radius: 50%; color: #5d4f3c; background: rgba(98, 82, 53, 0.1); cursor: pointer; font-size: 22px; line-height: 1; }
+.report-summary { margin: 16px 0; color: #5a513f; line-height: 1.6; }
+.report-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.report-item { min-height: 74px; padding: 12px; border: 1px solid rgba(93, 116, 76, 0.22); border-radius: 8px; background: rgba(244, 247, 232, 0.78); }
+.report-item span { display: block; color: #77705f; font-size: 12px; }
+.report-item strong { display: block; margin-top: 8px; color: #3d5f42; font-size: 22px; }
+.report-footer { display: flex; justify-content: space-between; gap: 12px; margin-top: 16px; color: #756d5c; font-size: 12px; }
 
 .time-machine-mask {
   position: absolute;
