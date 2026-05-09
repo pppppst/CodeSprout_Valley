@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { reportActivityToElectron } from '../reportService';
+import { reportActivityToElectronImmediately } from '../reportService';
 
 let isCodingActive = false;
 let accumulatedDurationIncrement = 0;
@@ -61,7 +61,7 @@ function triggerDurationReport(): void {
         return;
     }
 
-    reportActivityToElectron({ codingDuration: durationToSend });
+    reportActivityToElectronImmediately({ codingDuration: durationToSend });
     accumulatedDurationIncrement = 0;
     console.log(`[CS Valley] Coding duration increment: ${durationToSend} seconds.`);
 }
@@ -104,6 +104,22 @@ export function activateCodingDurationTracker(context: vscode.ExtensionContext):
 
     context.subscriptions.push(vscode.workspace.onDidSaveTextDocument(document => {
         if (isTrackableDocument(document)) {
+            markUserActive();
+        }
+    }));
+
+    context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(editor => {
+        if (editor && isTrackableDocument(editor.document)) {
+            markUserActive();
+        }
+    }));
+
+    context.subscriptions.push(vscode.window.onDidChangeTextEditorSelection(event => {
+        if (
+            event.textEditor === vscode.window.activeTextEditor &&
+            isTrackableDocument(event.textEditor.document) &&
+            event.selections.some(selection => !selection.isEmpty)
+        ) {
             markUserActive();
         }
     }));

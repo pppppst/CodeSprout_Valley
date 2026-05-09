@@ -61,13 +61,18 @@ function startPluginBridgeServer() {
         })
 
         // 合并其他字段（如果需要）并更新时间戳
-        latestPluginActivity = {
-          ...latestPluginActivity,
+        const activityDelta = {
           ...incoming,
           timestamp: Date.now()
         }
 
-        broadcastPluginActivity(latestPluginActivity)
+        latestPluginActivity = {
+          ...latestPluginActivity,
+          ...incoming,
+          timestamp: activityDelta.timestamp
+        }
+
+        broadcastPluginActivity(activityDelta)
 
         res.writeHead(200, { 'Content-Type': 'application/json' })
         res.end(JSON.stringify({ ok: true }))

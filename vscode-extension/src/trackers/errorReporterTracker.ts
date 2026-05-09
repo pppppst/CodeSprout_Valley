@@ -1,11 +1,9 @@
 import * as vscode from 'vscode';
-import { reportActivityToElectron } from '../reportService';
+import { reportActivityToElectronImmediately } from '../reportService';
 
 const REPORT_THROTTLE_MS = 3000;
 const DIAGNOSTIC_SETTLE_MS = 800;
 const CODE_EXTENSIONS = ['.py', '.c', '.cpp', '.js', '.ts', '.java', '.go'];
-
-const previousErrorStateByFile = new Map<string, boolean>();
 
 let pendingErrorCount = 0;
 let pendingPassCount = 0;
@@ -70,13 +68,13 @@ function flushDiagnosticReport(): void {
     }
 
     if (pendingErrorCount > 0) {
-        reportActivityToElectron({ errorCount: pendingErrorCount });
+        reportActivityToElectronImmediately({ errorCount: pendingErrorCount });
         console.log(`[CS Valley] Error increment: ${pendingErrorCount}.`);
         pendingErrorCount = 0;
     }
 
     if (pendingPassCount > 0) {
-        reportActivityToElectron({ codePassed: pendingPassCount });
+        reportActivityToElectronImmediately({ codePassed: pendingPassCount });
         console.log(`[CS Valley] Pass increment: ${pendingPassCount}.`);
         pendingPassCount = 0;
     }
@@ -89,28 +87,16 @@ async function onDocumentSaved(document: vscode.TextDocument): Promise<void> {
 
     await new Promise(resolve => setTimeout(resolve, DIAGNOSTIC_SETTLE_MS));
 
-    const fileKey = document.uri.toString();
-    const hasError = hasBlockingDiagnostic(document.uri);
-    const previousHasError = previousErrorStateByFile.get(fileKey);
-
-    if (previousHasError === undefined) {
-        previousErrorStateByFile.set(fileKey, hasError);
-        return;
-    }
-
-    if (!previousHasError && hasError) {
+    if (hasBlockingDiagnostic(document.uri)) {
         pendingErrorCount += 1;
-        scheduleDiagnosticReport();
-    } else if (previousHasError && !hasError) {
+    } else {
         pendingPassCount += 1;
-        scheduleDiagnosticReport();
     }
 
-    previousErrorStateByFile.set(fileKey, hasError);
+    scheduleDiagnosticReport();
 }
 
 export function activateErrorReporterTracker(context: vscode.ExtensionContext): void {
-    previousErrorStateByFile.clear();
     pendingErrorCount = 0;
     pendingPassCount = 0;
 
@@ -123,5 +109,4 @@ export function activateErrorReporterTracker(context: vscode.ExtensionContext): 
 
 export function deactivateErrorReporterTracker(): void {
     flushDiagnosticReport();
-    previousErrorStateByFile.clear();
 }

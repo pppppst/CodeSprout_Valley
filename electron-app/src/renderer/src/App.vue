@@ -1030,14 +1030,6 @@ onMounted(() => {
     })
   }
 
-  if (window.api?.getLatestActivity) {
-    window.api.getLatestActivity().then((payload) => {
-      applyActivityUpdate(payload)
-    }).catch((error) => {
-      console.error('[CS Valley] Failed to load latest activity:', error)
-    })
-  }
-
   if (cloudToken.value) {
     loadCloudSave()
       .then(() => {
