@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { reportActivityToElectron } from '../reportService';
+import { reportActivityToElectronImmediately } from '../reportService';
 
 const lastKnownLineCount = new Map<string, number>();
 
@@ -26,6 +26,7 @@ function calculateAndAccumulateCodeIncrement(document: vscode.TextDocument): voi
 
     if (lastLines === undefined) {
         lastKnownLineCount.set(uriStr, currentLines);
+        console.log(`[CS Valley] Code increment baseline initialized on save: ${uriStr}`);
         return;
     }
 
@@ -58,7 +59,7 @@ function flushCodeIncrementReport(): void {
         return;
     }
 
-    reportActivityToElectron({ codeAdded: accumulatedCodeAddedIncrement });
+    reportActivityToElectronImmediately({ codeAdded: accumulatedCodeAddedIncrement });
     console.log(`[CS Valley] Code increment: ${accumulatedCodeAddedIncrement} lines.`);
     accumulatedCodeAddedIncrement = 0;
 }

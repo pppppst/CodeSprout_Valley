@@ -23,6 +23,13 @@ export function reportActivityToElectron(data: ActivityReportData): void {
     }
 }
 
+export function reportActivityToElectronImmediately(data: ActivityReportData): void {
+    const payload = buildPayload(data);
+    if (payload) {
+        void sendPayload(payload);
+    }
+}
+
 export async function flushActivityBuffer(): Promise<void> {
     if (batchTimer) {
         clearTimeout(batchTimer);
@@ -30,6 +37,23 @@ export async function flushActivityBuffer(): Promise<void> {
     }
 
     await flushBuffer();
+}
+
+function buildPayload(data: ActivityReportData): (ActivityReportData & { timestamp: number }) | undefined {
+    const payload: ActivityReportData = {};
+
+    for (const key of NUMERIC_KEYS) {
+        const value = data[key];
+        if (typeof value === 'number' && Number.isFinite(value)) {
+            payload[key] = value;
+        }
+    }
+
+    if (Object.keys(payload).length === 0) {
+        return undefined;
+    }
+
+    return { ...payload, timestamp: Date.now() };
 }
 
 function mergeIntoBuffer(data: ActivityReportData): void {
@@ -47,10 +71,18 @@ async function flushBuffer(): Promise<void> {
         return;
     }
 
-    const payload = { ...dataBuffer, timestamp: Date.now() };
+    const payload = buildPayload(dataBuffer);
     dataBuffer = {};
     batchTimer = undefined;
 
+    if (!payload) {
+        return;
+    }
+
+    await sendPayload(payload);
+}
+
+async function sendPayload(payload: ActivityReportData & { timestamp: number }): Promise<void> {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
