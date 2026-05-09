@@ -1,4 +1,4 @@
-<script setup>
+﻿<script setup>
 import { ref, computed, watch, onMounted, onUnmounted, onBeforeUnmount, nextTick } from 'vue'
 import { getActiveJieQi } from './utils/calendar'
 import { registerAccount, loginAccount, fetchCloudSave, syncCloudSave } from './utils/cloudApi'
@@ -561,9 +561,9 @@ const currentBgUrl = computed(() => {
 })
 
 function getPlantStageByWaterings(waterings) {
-  if (waterings >= 120) return 4
-  if (waterings >= 60) return 3
-  if (waterings >= 30) return 2
+  if (waterings >= 4) return 4//120
+  if (waterings >= 3) return 3//60
+  if (waterings >= 2) return 2//30
   return 1
 }
 
@@ -597,6 +597,7 @@ const weeklyReport = computed(() => {
 })
 
 const plantImageConfig = {
+  // 全局默认配置
   default: {
     width: '95px',
     left: '200px',
@@ -604,22 +605,31 @@ const plantImageConfig = {
     transform: 'scale(5)',
     transformOrigin: 'bottom center'
   },
-  xiazhi: {
+
+  // ===================== 24节气 按顺序排列 =====================
+  // 春季节气
+  lichun: { // 立春
     default: {
       width: '100px',
       left: '450px',
       bottom: '160px',
-      transform: 'scale(5.5)', 
+      transform: 'scale(4)',
       transformOrigin: 'bottom center'
     },
-    stage1: {},
+    stage1: {
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(2)',
+      transformOrigin: 'bottom center'
+    },
     stage2: {},
     stage3: {},
     stage4: {}
   },
-  lixia: {
+  yushui: { // 雨水
     default: {
-      width: '100px', 
+      width: '100px',
       left: '450px',
       bottom: '160px',
       transform: 'scale(4)',
@@ -630,9 +640,288 @@ const plantImageConfig = {
     stage3: {},
     stage4: {}
   },
-  lichun: {
+  jingzhe: { // 惊蛰
     default: {
-      width: '100px', 
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(4)',
+      transformOrigin: 'bottom center'
+    },
+    stage1: {},
+    stage2: {},
+    stage3: {},
+    stage4: {}
+  },
+  chunfen: { // 春分
+    default: {
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(4)',
+      transformOrigin: 'bottom center'
+    },
+    stage1: {},
+    stage2: {},
+    stage3: {},
+    stage4: {}
+  },
+  qingming: { // 清明
+    default: {
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(4)',
+      transformOrigin: 'bottom center'
+    },
+    stage1: {},
+    stage2: {},
+    stage3: {},
+    stage4: {}
+  },
+  guyu: { // 谷雨
+    default: {
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(4)',
+      transformOrigin: 'bottom center'
+    },
+    stage1: {},
+    stage2: {},
+    stage3: {},
+    stage4: {}
+  },
+
+  // 夏季节气
+  lixia: { // 立夏
+    default: {
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(4)',
+      transformOrigin: 'bottom center'
+    },
+    stage1: {},
+    stage2: {},
+    stage3: {},
+    stage4: {}
+  },
+  xiaoman: { // 小满
+    default: {
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(4)',
+      transformOrigin: 'bottom center'
+    },
+    stage1: {},
+    stage2: {},
+    stage3: {},
+    stage4: {}
+  },
+  mangzhong: { // 芒种
+    default: {
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(4)',
+      transformOrigin: 'bottom center'
+    },
+    stage1: {},
+    stage2: {},
+    stage3: {},
+    stage4: {}
+  },
+  xiazhi: { // 夏至
+    default: {
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(5.5)',
+      transformOrigin: 'bottom center'
+    },
+    stage1: {},
+    stage2: {},
+    stage3: {},
+    stage4: {}
+  },
+  xiaoshu: { // 小暑
+    default: {
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(4)',
+      transformOrigin: 'bottom center'
+    },
+    stage1: {},
+    stage2: {},
+    stage3: {},
+    stage4: {}
+  },
+  dashu: { // 大暑
+    default: {
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(4)',
+      transformOrigin: 'bottom center'
+    },
+    stage1: {},
+    stage2: {},
+    stage3: {},
+    stage4: {}
+  },
+
+  // 秋季节气
+  liqiu: { // 立秋
+    default: {
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(4)',
+      transformOrigin: 'bottom center'
+    },
+    stage1: {},
+    stage2: {},
+    stage3: {},
+    stage4: {}
+  },
+  chushu: { // 处暑
+    default: {
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(4)',
+      transformOrigin: 'bottom center'
+    },
+    stage1: {},
+    stage2: {},
+    stage3: {},
+    stage4: {}
+  },
+  bailu: { // 白露
+    default: {
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(4)',
+      transformOrigin: 'bottom center'
+    },
+    stage1: {},
+    stage2: {},
+    stage3: {},
+    stage4: {}
+  },
+  qiufen: { // 秋分
+    default: {
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(4)',
+      transformOrigin: 'bottom center'
+    },
+    stage1: {},
+    stage2: {},
+    stage3: {},
+    stage4: {}
+  },
+  hanlu: { // 寒露
+    default: {
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(4)',
+      transformOrigin: 'bottom center'
+    },
+    stage1: {},
+    stage2: {},
+    stage3: {},
+    stage4: {}
+  },
+  shuangjiang: { // 霜降
+    default: {
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(4)',
+      transformOrigin: 'bottom center'
+    },
+    stage1: {},
+    stage2: {},
+    stage3: {},
+    stage4: {}
+  },
+
+  // 冬季节气
+  lidong: { // 立冬
+    default: {
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(4)',
+      transformOrigin: 'bottom center'
+    },
+    stage1: {},
+    stage2: {},
+    stage3: {},
+    stage4: {}
+  },
+  xiaoxue: { // 小雪
+    default: {
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(4)',
+      transformOrigin: 'bottom center'
+    },
+    stage1: {},
+    stage2: {},
+    stage3: {},
+    stage4: {}
+  },
+  daxue: { // 大雪
+    default: {
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(4)',
+      transformOrigin: 'bottom center'
+    },
+    stage1: {},
+    stage2: {},
+    stage3: {},
+    stage4: {}
+  },
+  dongzhi: { // 冬至
+    default: {
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(4)',
+      transformOrigin: 'bottom center'
+    },
+    stage1: {},
+    stage2: {},
+    stage3: {},
+    stage4: {}
+  },
+  xiaohan: { // 小寒
+    default: {
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(4)',
+      transformOrigin: 'bottom center'
+    },
+    stage1: {},
+    stage2: {},
+    stage3: {},
+    stage4: {}
+  },
+  dahan: { // 大寒
+    default: {
+      width: '100px',
       left: '450px',
       bottom: '160px',
       transform: 'scale(4)',
@@ -643,7 +932,7 @@ const plantImageConfig = {
     stage3: {},
     stage4: {}
   }
-}
+};
 
 function getPlantImageUrl(termKey, stage) {
   const imageKey = `./assets/${termKey}/stage${stage}.png`
