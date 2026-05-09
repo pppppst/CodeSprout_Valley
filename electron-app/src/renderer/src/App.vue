@@ -561,9 +561,9 @@ const currentBgUrl = computed(() => {
 })
 
 function getPlantStageByWaterings(waterings) {
-  if (waterings >= 4) return 4//120
-  if (waterings >= 3) return 3//60
-  if (waterings >= 2) return 2//30
+  if (waterings >= 120) return 4//120
+  if (waterings >= 60) return 3//60
+  if (waterings >= 30) return 2//30
   return 1
 }
 
@@ -613,7 +613,7 @@ const plantImageConfig = {
       width: '100px',
       left: '450px',
       bottom: '160px',
-      transform: 'scale(4)',
+      transform: 'scale(3.5)',
       transformOrigin: 'bottom center'
     },
     stage1: {
@@ -623,7 +623,13 @@ const plantImageConfig = {
       transform: 'scale(2)',
       transformOrigin: 'bottom center'
     },
-    stage2: {},
+    stage2: {
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(3)',
+      transformOrigin: 'bottom center'
+    },
     stage3: {},
     stage4: {}
   },
@@ -635,22 +641,38 @@ const plantImageConfig = {
       transform: 'scale(4)',
       transformOrigin: 'bottom center'
     },
-    stage1: {},
-    stage2: {},
-    stage3: {},
+    stage1: {
+      bottom: '80px'
+    },
+    stage2: {
+      bottom: '170px'
+    },
+    stage3: {
+      bottom: '140px'
+    },
     stage4: {}
   },
   jingzhe: { // 惊蛰
     default: {
       width: '100px',
       left: '450px',
-      bottom: '160px',
+      bottom: '180px',
       transform: 'scale(4)',
       transformOrigin: 'bottom center'
     },
-    stage1: {},
-    stage2: {},
-    stage3: {},
+    stage2: {
+      bottom: '120px'
+    },
+    stage1: {
+      width: '100px',
+      left: '450px',
+      bottom: '150px',
+      transform: 'scale(3)',
+      transformOrigin: 'bottom center'
+    },
+    stage3: {
+      bottom: '150px'
+    },
     stage4: {}
   },
   chunfen: { // 春分
@@ -661,8 +683,16 @@ const plantImageConfig = {
       transform: 'scale(4)',
       transformOrigin: 'bottom center'
     },
-    stage1: {},
-    stage2: {},
+    stage1: {
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(2)',
+      transformOrigin: 'bottom center'
+    },
+    stage2: {
+      transform: 'scale(3)'
+    },
     stage3: {},
     stage4: {}
   },
@@ -671,11 +701,13 @@ const plantImageConfig = {
       width: '100px',
       left: '450px',
       bottom: '160px',
-      transform: 'scale(4)',
+      transform: 'scale(3.5)',
       transformOrigin: 'bottom center'
     },
     stage1: {},
-    stage2: {},
+    stage2: {
+      bottom: '150px'
+    },
     stage3: {},
     stage4: {}
   },
@@ -687,10 +719,34 @@ const plantImageConfig = {
       transform: 'scale(4)',
       transformOrigin: 'bottom center'
     },
-    stage1: {},
-    stage2: {},
-    stage3: {},
-    stage4: {}
+    stage1: {
+      width: '100px',
+      left: '450px',
+      bottom: '100px',
+      transform: 'scale(4)',
+      transformOrigin: 'bottom center'
+    },
+    stage2: {
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(4)',
+      transformOrigin: 'bottom center'
+    },
+    stage3: {
+      width: '100px',
+      left: '450px',
+      bottom: '120px',
+      transform: 'scale(4)',
+      transformOrigin: 'bottom center'
+    },
+    stage4: {
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(3.5)',
+      transformOrigin: 'bottom center'
+    }
   },
 
   // 夏季节气

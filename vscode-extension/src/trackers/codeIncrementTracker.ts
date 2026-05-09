@@ -1,87 +1,99 @@
 import * as vscode from 'vscode';
 import { reportActivityToElectron } from '../reportService';
 
-let lastKnownLineCount: Map<string, number> = new Map();
+const lastKnownLineCount = new Map<string, number>();
+
 let accumulatedCodeAddedIncrement = 0;
 let reportThrottleTimeout: NodeJS.Timeout | undefined;
 
 function getReportThrottleMs(): number {
-  const config = vscode.workspace.getConfiguration('csvalley');
-  return config.get<number>('reportThrottleMs', 3000);
+    const config = vscode.workspace.getConfiguration('csvalley');
+    return config.get<number>('reportThrottleMs', 3000);
 }
 
-// 计算增量
-function calculateAndAccumulateCodeIncrement(document: vscode.TextDocument) {
+function isTrackableDocument(document: vscode.TextDocument): boolean {
+    return document.uri.scheme === 'file' && !document.isUntitled;
+}
+
+function calculateAndAccumulateCodeIncrement(document: vscode.TextDocument): void {
+    if (!isTrackableDocument(document)) {
+        return;
+    }
+
     const uriStr = document.uri.toString();
     const currentLines = document.lineCount;
-    
-    // 上次行数（没有则为 0 → 新文件）
-    const lastLines = lastKnownLineCount.get(uriStr) ?? 0;
+    const lastLines = lastKnownLineCount.get(uriStr);
+
+    if (lastLines === undefined) {
+        lastKnownLineCount.set(uriStr, currentLines);
+        return;
+    }
 
     const diff = currentLines - lastLines;
     if (diff > 0) {
         accumulatedCodeAddedIncrement += diff;
-        triggerReportCodeIncrement();
+        scheduleCodeIncrementReport();
     }
 
-    // 永远更新最新行数
     lastKnownLineCount.set(uriStr, currentLines);
 }
 
-// 节流上报
-function triggerReportCodeIncrement() {
+function scheduleCodeIncrementReport(): void {
+    if (reportThrottleTimeout) {
+        clearTimeout(reportThrottleTimeout);
+    }
+
+    reportThrottleTimeout = setTimeout(() => {
+        flushCodeIncrementReport();
+    }, getReportThrottleMs());
+}
+
+function flushCodeIncrementReport(): void {
     if (reportThrottleTimeout) {
         clearTimeout(reportThrottleTimeout);
         reportThrottleTimeout = undefined;
     }
 
-    reportThrottleTimeout = setTimeout(() => {
-        if (accumulatedCodeAddedIncrement > 0) {
-            reportActivityToElectron({ codeAdded: accumulatedCodeAddedIncrement });
-            console.log(`上报代码增量: ${accumulatedCodeAddedIncrement} 行`);
-            accumulatedCodeAddedIncrement = 0;
-        }
-        reportThrottleTimeout = undefined;
-    }, getReportThrottleMs());
+    if (accumulatedCodeAddedIncrement <= 0) {
+        return;
+    }
+
+    reportActivityToElectron({ codeAdded: accumulatedCodeAddedIncrement });
+    console.log(`[CS Valley] Code increment: ${accumulatedCodeAddedIncrement} lines.`);
+    accumulatedCodeAddedIncrement = 0;
 }
 
-// 激活
-export function activateCodeIncrementTracker(context: vscode.ExtensionContext) {
+function recordBaseline(document: vscode.TextDocument): void {
+    if (!isTrackableDocument(document)) {
+        return;
+    }
+
+    const key = document.uri.toString();
+    if (!lastKnownLineCount.has(key)) {
+        lastKnownLineCount.set(key, document.lineCount);
+    }
+}
+
+export function activateCodeIncrementTracker(context: vscode.ExtensionContext): void {
     lastKnownLineCount.clear();
     accumulatedCodeAddedIncrement = 0;
 
-    // 记录基准行数（打开文件时不计增量）
-    const recordBaseline = (doc: vscode.TextDocument) => {
-        if (doc.isUntitled) return;
-        const key = doc.uri.toString();
-        
-        if (!lastKnownLineCount.has(key)) {
-            lastKnownLineCount.set(key, doc.lineCount);
-        }
-    };
-
-    // 1. 保存时计算增量
     context.subscriptions.push(
-        vscode.workspace.onDidSaveTextDocument(doc => {
-            calculateAndAccumulateCodeIncrement(doc);
+        vscode.workspace.onDidSaveTextDocument(document => {
+            calculateAndAccumulateCodeIncrement(document);
         })
     );
 
-    // 2. 打开文件时记录基准
     context.subscriptions.push(
-        vscode.workspace.onDidOpenTextDocument(doc => {
-            recordBaseline(doc);
+        vscode.workspace.onDidOpenTextDocument(document => {
+            recordBaseline(document);
         })
     );
 
-    // 3. 插件启动时，已打开的文件全部记录基准
-    vscode.workspace.textDocuments.forEach(doc => {
-        recordBaseline(doc);
-    });
+    vscode.workspace.textDocuments.forEach(recordBaseline);
 }
 
-// 停用
-export function deactivateCodeIncrementTracker(context: vscode.ExtensionContext) {
-    if (reportThrottleTimeout) clearTimeout(reportThrottleTimeout);
-    triggerReportCodeIncrement();
+export function deactivateCodeIncrementTracker(): void {
+    flushCodeIncrementReport();
+    lastKnownLineCount.clear();
 }

@@ -1,73 +1,86 @@
 import * as vscode from 'vscode';
 import { ActivityReportData } from './types';
 
-// 1. 数据缓冲区：暂存短时间内产生的所有数据
+const BATCH_INTERVAL = 1500;
+const REQUEST_TIMEOUT_MS = 3000;
+const NUMERIC_KEYS: Array<keyof ActivityReportData> = [
+    'codeAdded',
+    'errorCount',
+    'codePassed',
+    'codingDuration'
+];
+
 let dataBuffer: ActivityReportData = {};
-let batchTimer: NodeJS.Timeout | null = null;
-const BATCH_INTERVAL = 1500; // 聚合时间阈值：1.5秒
+let batchTimer: NodeJS.Timeout | undefined;
 
-/**
- * 核心暴露接口：开发者 A 和 B 调用的依然是这个函数
- * 但数据不再立即发送，而是进入缓冲区等待“打包”
- */
 export function reportActivityToElectron(data: ActivityReportData): void {
-    // 将新数据合并到缓冲区 (浅拷贝合并)
-    dataBuffer = { ...dataBuffer, ...data };
+    mergeIntoBuffer(data);
 
-    // 如果没有定时器在跑，开启一个
     if (!batchTimer) {
         batchTimer = setTimeout(() => {
-            flushBuffer();
+            void flushBuffer();
         }, BATCH_INTERVAL);
     }
 }
 
-/**
- * 内部函数：负责将缓冲区的数据清空并真正通过网络发送
- */
+export async function flushActivityBuffer(): Promise<void> {
+    if (batchTimer) {
+        clearTimeout(batchTimer);
+        batchTimer = undefined;
+    }
+
+    await flushBuffer();
+}
+
+function mergeIntoBuffer(data: ActivityReportData): void {
+    for (const key of NUMERIC_KEYS) {
+        const value = data[key];
+        if (typeof value === 'number' && Number.isFinite(value)) {
+            dataBuffer[key] = (dataBuffer[key] ?? 0) + value;
+        }
+    }
+}
+
 async function flushBuffer(): Promise<void> {
-    if (Object.keys(dataBuffer).length === 0) return;
+    if (Object.keys(dataBuffer).length === 0) {
+        batchTimer = undefined;
+        return;
+    }
 
-    // 准备发送的数据快照，并清空缓冲区和计时器
     const payload = { ...dataBuffer, timestamp: Date.now() };
-    dataBuffer = {}; 
-    batchTimer = null;
+    dataBuffer = {};
+    batchTimer = undefined;
 
-    const url = getElectronReportUrl();
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
     try {
-        // 使用 AbortController 实现超时控制 (3秒超时)
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 3000);
-
-        // 使用 VS Code 目标环境(Node.js 18+)内置的原生 fetch
-        const response = await fetch(url, {
+        const response = await fetch(getElectronReportUrl(), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload),
             signal: controller.signal
         });
 
-        clearTimeout(timeoutId);
-
         if (!response.ok) {
             console.error(`[CS Valley] Server responded with ${response.status}`);
         }
-    } catch (error: any) {
-        if (error.name === 'AbortError') {
+    } catch (error: unknown) {
+        if (error instanceof Error && error.name === 'AbortError') {
             console.error('[CS Valley] Report request timed out.');
-        } else {
+        } else if (error instanceof Error) {
             console.error(`[CS Valley] Network error: ${error.message}`);
+        } else {
+            console.error('[CS Valley] Unknown network error.');
         }
+    } finally {
+        clearTimeout(timeoutId);
     }
 }
 
-/**
- * 配置读取逻辑保持不变
- */
 function getElectronReportUrl(): string {
     const config = vscode.workspace.getConfiguration('csvalley');
     const port = config.get<number>('electronPort', 3001);
     const path = config.get<string>('reportPath', '/activity-report');
-    return `http://localhost:${port}${path}`;
+    return `http://127.0.0.1:${port}${path}`;
 }

@@ -48,6 +48,20 @@
           "description": "General throttling interval for sending reports to the Electron app (in milliseconds).",
           "markdownDescription": "The **general throttling interval** in milliseconds before activity reports are sent to the Electron app. This helps prevent overwhelming the local server with too many requests.",
           "scope": "user"
+        },
+        "csvalley.codingActivityDebounceMs": {
+          "type": "number",
+          "default": 5000,
+          "description": "Idle timeout before coding activity is considered paused (in milliseconds).",
+          "markdownDescription": "The **idle timeout** in milliseconds. If no edit or save happens during this window, CS Valley pauses coding-duration accumulation.",
+          "scope": "user"
+        },
+        "csvalley.codingDurationReportIntervalMs": {
+          "type": "number",
+          "default": 60000,
+          "description": "Interval for sending coding-duration increments to the Electron app (in milliseconds).",
+          "markdownDescription": "The **coding-duration report interval** in milliseconds while the user is actively editing.",
+          "scope": "user"
         }
       }
     }
