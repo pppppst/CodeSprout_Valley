@@ -4,6 +4,9 @@ import { getActiveJieQi } from './utils/calendar'
 import WeatherEffect from './components/WeatherEffect.vue'
 import { SolarUtil } from 'lunar-javascript'
 
+// ==========================================
+// 1. 悬浮窗与基础环境配置
+// ==========================================
 const isFloatingMode = ref(false)
 
 const bubbleTop = computed(() => {
@@ -31,68 +34,130 @@ function handleRestore() {
   }
 }
 
+const uiScale = ref(1)
+function updateUiScale() {
+  const designWidth = 1365
+  const designHeight = 768
+  const scaleX = window.innerWidth / designWidth
+  const scaleY = window.innerHeight / designHeight
+  uiScale.value = Math.min(scaleX, scaleY)
+}
+
+// ==========================================
+// 2. 核心业务与资源状态
+// ==========================================
 const codeLines = ref(150)
 const catExp = ref(0)
 const message = ref('🐱 睡觉中...')
-let offActivityUpdate = null
+
+const feedCount = ref(0)
+const waterCount = ref(0)
+const foodStock = ref(20)
+const waterStock = ref(20)
+
 const todayPassed = ref(0)
 const todayErrors = ref(0)
+let offActivityUpdate = null
+const isStatsVisible = ref(true)
 
 const CODE_LINES_PER_REWARD = 50
 const RESOURCE_PER_REWARD = 20
 const WATER_COST = 20
 const MAX_WATERINGS_PER_TERM = 120
 const MAX_WATER_REWARDED_LINES = MAX_WATERINGS_PER_TERM * CODE_LINES_PER_REWARD
-const SANDBOX_CODE_LINES = 6000
 
 const plantWaterByTerm = ref({})
-const sandboxSnapshot = ref(null)
 const suppressResourceRewards = ref(false)
 
-function applyActivityUpdate(data) {
-  if (!data || typeof data !== 'object') return
-  if (isSandboxActive.value) return
+// ==========================================
+// 3. 宠物交互控制 (带跨日持久化的微型状态机)
+// ==========================================
+// 可选状态: 'idle' | 'eating' | 'happy' | 'refused' | 'playing'
+const catState = ref('idle')
+let catStateTimer = null
 
-  if (typeof data.codeAdded === 'number' && Number.isFinite(data.codeAdded)) {
-    codeLines.value = Math.max(0, codeLines.value + data.codeAdded)
-  }
-
-  if (typeof data.codePassed === 'number' && Number.isFinite(data.codePassed) && data.codePassed > 0) {
-    catExp.value += data.codePassed * 5
-    todayPassed.value += data.codePassed
-    message.value = `✅ ${data.codePassed} 个文件通过检查，经验提升中...`
-    setTimeout(() => {
-      message.value = '🐱 睡觉中...'
-    }, 1800)
-  }
-
-  if (typeof data.errorCount === 'number' && Number.isFinite(data.errorCount) && data.errorCount > 0) {
-    todayErrors.value += data.errorCount
-    message.value = `⚠️ 发现 ${data.errorCount} 个新错误，快去看看吧！`
-    setTimeout(() => {
-      message.value = '🐱 睡觉中...'
-    }, 2200)
-  }
+// 新增：动态加载图片资源映射
+const catImages = {
+  idle: new URL('./assets/Cat/cat_sleep.png', import.meta.url).href,
+  eating: new URL('./assets/Cat/cat_eat.png', import.meta.url).href,
+  happy: new URL('./assets/Cat/cat_happy.png', import.meta.url).href,
+  refused: new URL('./assets/Cat/cat_sad.png', import.meta.url).href,
+  playing: new URL('./assets/Cat/cat_watching.png', import.meta.url).href // 玩球时使用专注看球的状态
 }
 
-const feedCount = ref(0)
-const waterCount = ref(0)
-const foodStock = ref(20)
-const waterStock = ref(20)
-const isStatsVisible = ref(true)
+// 新增：根据状态动态计算当前的猫咪图片
+const currentCatImage = computed(() => {
+  return catImages[catState.value] || catImages.idle
+})
+
+// 获取今天日期的字符串格式，例如 "2026-5-7"
+function getTodayString() {
+  const d = new Date()
+  return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`
+}
+
+// 从本地缓存读取最后一次喂食的日期
+const lastFedDate = ref(localStorage.getItem('cs_valley_last_fed_date') || '')
+
+// 优化后的状态重置函数：记住先前的持久状态
+function resetCatState(delay = 2000) {
+  if (catStateTimer) clearTimeout(catStateTimer)
+  catStateTimer = setTimeout(() => {
+    // 检查今天是否已经喂过，如果是，恢复为玩球/专注状态
+    if (lastFedDate.value === getTodayString()) {
+      catState.value = 'playing'
+      message.value = '⚽ 充满活力，玩球中！'
+    } else {
+      catState.value = 'idle'
+      message.value = '🐱 睡觉中...'
+    }
+  }, delay)
+}
+
+
 
 function feedCat() {
+  if (foodStock.value < 10) {
+    catState.value = 'refused'
+    message.value = '😿 喵...肚子饿，可是猫粮不足 10 份！'
+    resetCatState(2500)
+    return
+  }
+
+  // 结算资源
   catExp.value += 10
   feedCount.value++
-  foodStock.value = Math.max(foodStock.value - 10, 0)
-  message.value = '😺 吧唧吧唧...好吃！(溢出经验+10)'
-  setTimeout(() => message.value = '🐱 睡觉中...', 2000)
+  foodStock.value -= 10
+  
+  catState.value = 'eating'
+  message.value = '😺 吧唧吧唧...猫粮真香！(经验+10)'
+
+  // 吃完后进入“玩球”状态，并记录日期
+  if (catStateTimer) clearTimeout(catStateTimer)
+  catStateTimer = setTimeout(() => {
+    catState.value = 'playing'
+    message.value = '⚽ 充满活力，玩球中！'
+    
+    // 记录今天已经喂过了
+    const todayStr = getTodayString()
+    lastFedDate.value = todayStr
+    localStorage.setItem('cs_valley_last_fed_date', todayStr)
+  }, 1500)
+}
+
+function interactWithCat() {
+  if (catState.value === 'eating') return // 吃饭时防打扰
+
+  // 即使在玩球，也可以摸摸它，但摸完要继续玩球
+  catState.value = 'happy'
+  message.value = '❤️ 呼噜呼噜...最喜欢你了！'
+  resetCatState(2000)
 }
 
 function waterPlant() {
   if (waterStock.value < WATER_COST) {
     message.value = `🚿 水滴不足，浇水需要 ${WATER_COST} 份水滴！`
-    setTimeout(() => message.value = '🐱 睡觉中...', 2000)
+    resetCatState(2000)
     return
   }
 
@@ -109,40 +174,37 @@ function waterPlant() {
   }
 
   message.value = '🌱 咕噜咕噜...水好甜！'
-  setTimeout(() => message.value = '🐱 睡觉中...', 2000)
+  resetCatState(2000)
 }
 
-function openGallery() {
-  message.value = '📖 正在打开节气图鉴...'
-  setTimeout(() => message.value = '🐱 睡觉中...', 2000)
+// ==========================================
+// 4. 插件数据更新监听
+// ==========================================
+function applyActivityUpdate(data) {
+  if (!data || typeof data !== 'object') return
+  if (isSandboxActive.value) return
+
+  if (typeof data.codeAdded === 'number' && Number.isFinite(data.codeAdded)) {
+    codeLines.value = Math.max(0, codeLines.value + data.codeAdded)
+  }
+
+  if (typeof data.codePassed === 'number' && Number.isFinite(data.codePassed) && data.codePassed > 0) {
+    catExp.value += data.codePassed * 5
+    todayPassed.value += data.codePassed
+    message.value = `✅ ${data.codePassed} 个文件通过，经验提升中...`
+    catState.value = 'happy'
+    resetCatState(2500)
+  }
+
+  if (typeof data.errorCount === 'number' && Number.isFinite(data.errorCount) && data.errorCount > 0) {
+    todayErrors.value += data.errorCount
+    message.value = `⚠️ 发现 ${data.errorCount} 个新错误，快去看看吧！`
+    catState.value = 'refused' 
+    resetCatState(3000)
+  }
 }
 
-function openSettings() {
-  message.value = '⚙️ 正在打开设置...'
-  setTimeout(() => message.value = '🐱 睡觉中...', 2000)
-}
-
-function openWeeklyReport() {
-  message.value = '🗞️ 正在打开节气周报...'
-  setTimeout(() => message.value = '🐱 睡觉中...', 2000)
-}
-
-function minimizeWindow() {
-  window.api?.minimizeWindow?.()
-}
-
-function hideToTray() {
-  window.api?.hideToTray?.()
-}
-
-function closeWindow() {
-  window.api?.closeWindow?.()
-}
-
-function toggleStats() {
-  isStatsVisible.value = !isStatsVisible.value
-}
-
+// 经验条计算
 const activeGridCount = computed(() => {
   return Math.min(Math.floor(codeLines.value / CODE_LINES_PER_REWARD), 5)
 })
@@ -172,217 +234,30 @@ watch(rewardedCodeThreshold, (newValue) => {
   }
 })
 
+// ==========================================
+// 5. 辅助功能 (图鉴、设置、周报)
+// ==========================================
+function openGallery() {
+  message.value = '📖 正在打开节气图鉴...'
+  resetCatState(2000)
+}
+function openSettings() {
+  message.value = '⚙️ 正在打开设置...'
+  resetCatState(2000)
+}
+function openWeeklyReport() {
+  message.value = '🗞️ 正在打开节气周报...'
+  resetCatState(2000)
+}
+function toggleStats() {
+  isStatsVisible.value = !isStatsVisible.value
+}
+
+// ==========================================
+// 6. 日期、节气与环境表现
+// ==========================================
 const now = ref(new Date())
 let timerId = null
-const uiScale = ref(1)
-
-const mockDateString = ref(null)
-const isTimeMachineOpen = ref(false)
-const tmYear = ref('')
-const tmMonth = ref('')
-const tmDay = ref('')
-const timeMachineError = ref('')
-const tmYearInputEl = ref(null)
-
-function pad2(n) {
-  return String(n).padStart(2, '0')
-}
-
-function parseYmdString(ymd) {
-  if (!ymd) return null
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd)
-  if (!m) return null
-  return { y: Number(m[1]), m: Number(m[2]), d: Number(m[3]) }
-}
-
-function makeLocalDate(y, m, d) {
-  return new Date(y, m - 1, d)
-}
-
-function isValidDateObj(dt) {
-  return dt instanceof Date && !Number.isNaN(dt.getTime())
-}
-
-function isValidYmd(y, m, d) {
-  if (!Number.isInteger(y) || !Number.isInteger(m) || !Number.isInteger(d)) return false
-  const dt = makeLocalDate(y, m, d)
-  return dt.getFullYear() === y && (dt.getMonth() + 1) === m && dt.getDate() === d
-}
-
-const isSandboxActive = computed(() => !!parseYmdString(mockDateString.value))
-
-const effectiveDate = computed(() => {
-  const parsed = parseYmdString(mockDateString.value)
-  const candidate = parsed ? makeLocalDate(parsed.y, parsed.m, parsed.d) : now.value
-  return isValidDateObj(candidate) ? candidate : now.value
-})
-
-function getRewardThresholdForLines(lines) {
-  return Math.max(0, Math.floor(lines / CODE_LINES_PER_REWARD))
-}
-
-function getSandboxResourceStock(lines) {
-  return getRewardThresholdForLines(lines) * RESOURCE_PER_REWARD
-}
-
-function getSandboxWaterStock(lines) {
-  const maxWaterThreshold = Math.floor(MAX_WATER_REWARDED_LINES / CODE_LINES_PER_REWARD)
-  return Math.min(getRewardThresholdForLines(lines), maxWaterThreshold) * RESOURCE_PER_REWARD
-}
-
-function clonePlantWaterState() {
-  return { ...plantWaterByTerm.value }
-}
-
-function captureCurrentState() {
-  return {
-    mockDateString: mockDateString.value,
-    codeLines: codeLines.value,
-    catExp: catExp.value,
-    todayPassed: todayPassed.value,
-    todayErrors: todayErrors.value,
-    feedCount: feedCount.value,
-    waterCount: waterCount.value,
-    foodStock: foodStock.value,
-    waterStock: waterStock.value,
-    highestRewardedThreshold: highestRewardedThreshold.value,
-    plantWaterByTerm: clonePlantWaterState()
-  }
-}
-
-function setCodeLinesWithoutRewards(lines) {
-  suppressResourceRewards.value = true
-  codeLines.value = lines
-  highestRewardedThreshold.value = getRewardThresholdForLines(lines)
-  nextTick(() => {
-    suppressResourceRewards.value = false
-  })
-}
-
-function getTermPinyinForDate(date) {
-  try {
-    const termName = (getSolarTerm(date) || '').trim()
-    return solarTermMap[termName] || DEFAULT_PLANT_TERM
-  } catch {
-    return DEFAULT_PLANT_TERM
-  }
-}
-
-function applySandboxState(date) {
-  const termKey = getTermPinyinForDate(date)
-
-  setCodeLinesWithoutRewards(SANDBOX_CODE_LINES)
-  foodStock.value = getSandboxResourceStock(SANDBOX_CODE_LINES)
-  waterStock.value = getSandboxWaterStock(SANDBOX_CODE_LINES)
-  feedCount.value = 0
-  waterCount.value = 0
-  todayPassed.value = 0
-  todayErrors.value = 0
-  plantWaterByTerm.value = {
-    [termKey]: 0
-  }
-}
-
-function restoreSnapshot(snapshot) {
-  if (!snapshot) return
-
-  mockDateString.value = snapshot.mockDateString
-  catExp.value = snapshot.catExp
-  todayPassed.value = snapshot.todayPassed
-  todayErrors.value = snapshot.todayErrors
-  feedCount.value = snapshot.feedCount
-  waterCount.value = snapshot.waterCount
-  foodStock.value = snapshot.foodStock
-  waterStock.value = snapshot.waterStock
-  plantWaterByTerm.value = { ...snapshot.plantWaterByTerm }
-  suppressResourceRewards.value = true
-  codeLines.value = snapshot.codeLines
-  highestRewardedThreshold.value = snapshot.highestRewardedThreshold
-  nextTick(() => {
-    suppressResourceRewards.value = false
-  })
-}
-
-function openTimeMachine() {
-  const parsed = parseYmdString(mockDateString.value)
-  const base = parsed ? makeLocalDate(parsed.y, parsed.m, parsed.d) : now.value
-
-  tmYear.value = String(base.getFullYear())
-  tmMonth.value = pad2(base.getMonth() + 1)
-  tmDay.value = pad2(base.getDate())
-  timeMachineError.value = ''
-  isTimeMachineOpen.value = true
-
-  nextTick(() => {
-    tmYearInputEl.value?.focus?.()
-  })
-}
-
-function closeTimeMachine() {
-  isTimeMachineOpen.value = false
-  timeMachineError.value = ''
-}
-
-function applyTimeMachine() {
-  const y = Number(tmYear.value)
-  const m = Number(tmMonth.value)
-  const d = Number(tmDay.value)
-
-  if (!Number.isInteger(y) || y <= 0) {
-    timeMachineError.value = '提示：年份不合理，请输入正确的年份！'
-    return
-  }
-
-  if (!Number.isInteger(m) || m < 1 || m > 12) {
-    timeMachineError.value = '提示：月份不合理，请输入 1 到 12 之间的整数！'
-    return
-  }
-
-  const maxDays = SolarUtil.getDaysOfMonth(y, m)
-
-  if (!Number.isInteger(d) || d < 1 || d > maxDays) {
-    timeMachineError.value = `提示：日期不合理！${y}年${m}月共有 ${maxDays} 天，请重新输入。`
-    return
-  }
-
-  if (!sandboxSnapshot.value) {
-    sandboxSnapshot.value = captureCurrentState()
-  }
-
-  const sandboxDate = makeLocalDate(y, m, d)
-  mockDateString.value = `${y}-${pad2(m)}-${pad2(d)}`
-  applySandboxState(sandboxDate)
-  isTimeMachineOpen.value = false
-  timeMachineError.value = ''
-
-  message.value = `⏳ 沙盘模式生效！前往 ${mockDateString.value}`
-  setTimeout(() => (message.value = '🐱 睡觉中...'), 3000)
-}
-
-function exitTimeMachine() {
-  restoreSnapshot(sandboxSnapshot.value)
-  sandboxSnapshot.value = null
-  mockDateString.value = null
-  isTimeMachineOpen.value = false
-
-  message.value = '⏰ 退出沙盘，已恢复现实时间！'
-  setTimeout(() => (message.value = '🐱 睡觉中...'), 3000)
-}
-
-function updateUiScale() {
-  const designWidth = 1365
-  const designHeight = 768
-  const scaleX = window.innerWidth / designWidth
-  const scaleY = window.innerHeight / designHeight
-  uiScale.value = Math.min(scaleX, scaleY)
-}
-
-function getSolarTerm(date) {
-  const month = date.getMonth()
-  const day = date.getDate()
-  const year = date.getFullYear()
-  return getActiveJieQi(year, month + 1, day)
-}
 
 const currentDate = computed(() => {
   const targetDate = isValidDateObj(effectiveDate.value) ? effectiveDate.value : now.value
@@ -391,6 +266,13 @@ const currentDate = computed(() => {
   const day = String(targetDate.getDate()).padStart(2, '0')
   return `${year}年${month}月${day}日`
 })
+
+function getSolarTerm(date) {
+  const month = date.getMonth()
+  const day = date.getDate()
+  const year = date.getFullYear()
+  return getActiveJieQi(year, month + 1, day)
+}
 
 const currentSolarTerm = computed(() => {
   const dt = isValidDateObj(effectiveDate.value) ? effectiveDate.value : now.value
@@ -435,7 +317,6 @@ const currentTermPinyin = computed(() => {
 const currentBgUrl = computed(() => {
   const termName = (currentSolarTerm.value || '').trim();
   const pinyin = solarTermMap[termName];
-  
   if (pinyin) {
     return new URL(`./assets/SolarTerm/${pinyin}.png`, import.meta.url).href;
   }
@@ -456,50 +337,26 @@ const currentPlantStage = computed(() => {
 
 const plantImageConfig = {
   default: {
-    width: '95px',
-    left: '200px',
-    bottom: '0px',
-    transform: 'scale(5)',
-    transformOrigin: 'bottom center'
+    width: '95px', left: '200px', bottom: '0px',
+    transform: 'scale(5)', transformOrigin: 'bottom center'
   },
   xiazhi: {
     default: {
-      width: '100px',
-      left: '450px',
-      bottom: '160px',
-      transform: 'scale(5.5)', 
-      transformOrigin: 'bottom center'
-    },
-    stage1: {},
-    stage2: {},
-    stage3: {},
-    stage4: {}
+      width: '100px', left: '450px', bottom: '160px',
+      transform: 'scale(5.5)', transformOrigin: 'bottom center'
+    }
   },
   lixia: {
     default: {
-      width: '100px', 
-      left: '450px',
-      bottom: '160px',
-      transform: 'scale(4)',
-      transformOrigin: 'bottom center'
-    },
-    stage1: {},
-    stage2: {},
-    stage3: {},
-    stage4: {}
+      width: '100px', left: '450px', bottom: '160px',
+      transform: 'scale(4)', transformOrigin: 'bottom center'
+    }
   },
   lichun: {
     default: {
-      width: '100px', 
-      left: '450px',
-      bottom: '160px',
-      transform: 'scale(4)',
-      transformOrigin: 'bottom center'
-    },
-    stage1: {},
-    stage2: {},
-    stage3: {},
-    stage4: {}
+      width: '100px', left: '450px', bottom: '160px',
+      transform: 'scale(4)', transformOrigin: 'bottom center'
+    }
   }
 }
 
@@ -507,11 +364,7 @@ function getPlantImageUrl(termKey, stage) {
   const imageKey = `./assets/${termKey}/stage${stage}.png`
   const fallbackKey = `./assets/${DEFAULT_PLANT_TERM}/stage${DEFAULT_PLANT_STAGE}.png`
 
-  if (plantImageModules[imageKey]) {
-    return plantImageModules[imageKey]
-  }
-
-  console.warn(`[CS Valley] Missing plant image: ${imageKey}, fallback to ${fallbackKey}`)
+  if (plantImageModules[imageKey]) return plantImageModules[imageKey]
   return plantImageModules[fallbackKey] || new URL('./assets/xiazhi/stage1.png', import.meta.url).href
 }
 
@@ -520,42 +373,184 @@ const currentPlant = computed(() => {
   const stage = currentPlantStage.value
   const termConfig = plantImageConfig[termKey] || {}
   const stageConfig = termConfig[`stage${stage}`] || {}
-
   const style = {
     ...plantImageConfig.default,
     ...(termConfig.default || {}),
     ...stageConfig
   }
-
-  return {
-    src: getPlantImageUrl(termKey, stage),
-    style
-  }
+  return { src: getPlantImageUrl(termKey, stage), style }
 })
 
+// ==========================================
+// 7. 沙盘模式 (Time Machine)
+// ==========================================
+const SANDBOX_CODE_LINES = 6000
+const mockDateString = ref(null)
+const isTimeMachineOpen = ref(false)
+const tmYear = ref('')
+const tmMonth = ref('')
+const tmDay = ref('')
+const timeMachineError = ref('')
+const tmYearInputEl = ref(null)
+const sandboxSnapshot = ref(null)
+
+function pad2(n) { return String(n).padStart(2, '0') }
+function parseYmdString(ymd) {
+  if (!ymd) return null
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd)
+  if (!m) return null
+  return { y: Number(m[1]), m: Number(m[2]), d: Number(m[3]) }
+}
+function makeLocalDate(y, m, d) { return new Date(y, m - 1, d) }
+function isValidDateObj(dt) { return dt instanceof Date && !Number.isNaN(dt.getTime()) }
+
+const isSandboxActive = computed(() => !!parseYmdString(mockDateString.value))
+const effectiveDate = computed(() => {
+  const parsed = parseYmdString(mockDateString.value)
+  const candidate = parsed ? makeLocalDate(parsed.y, parsed.m, parsed.d) : now.value
+  return isValidDateObj(candidate) ? candidate : now.value
+})
+
+function captureCurrentState() {
+  return {
+    mockDateString: mockDateString.value,
+    codeLines: codeLines.value,
+    catExp: catExp.value,
+    todayPassed: todayPassed.value,
+    todayErrors: todayErrors.value,
+    feedCount: feedCount.value,
+    waterCount: waterCount.value,
+    foodStock: foodStock.value,
+    waterStock: waterStock.value,
+    highestRewardedThreshold: highestRewardedThreshold.value,
+    plantWaterByTerm: { ...plantWaterByTerm.value }
+  }
+}
+
+function restoreSnapshot(snapshot) {
+  if (!snapshot) return
+  mockDateString.value = snapshot.mockDateString
+  catExp.value = snapshot.catExp
+  todayPassed.value = snapshot.todayPassed
+  todayErrors.value = snapshot.todayErrors
+  feedCount.value = snapshot.feedCount
+  waterCount.value = snapshot.waterCount
+  foodStock.value = snapshot.foodStock
+  waterStock.value = snapshot.waterStock
+  plantWaterByTerm.value = { ...snapshot.plantWaterByTerm }
+  suppressResourceRewards.value = true
+  codeLines.value = snapshot.codeLines
+  highestRewardedThreshold.value = snapshot.highestRewardedThreshold
+  nextTick(() => suppressResourceRewards.value = false)
+}
+
+function openTimeMachine() {
+  const parsed = parseYmdString(mockDateString.value)
+  const base = parsed ? makeLocalDate(parsed.y, parsed.m, parsed.d) : now.value
+  tmYear.value = String(base.getFullYear())
+  tmMonth.value = pad2(base.getMonth() + 1)
+  tmDay.value = pad2(base.getDate())
+  timeMachineError.value = ''
+  isTimeMachineOpen.value = true
+  nextTick(() => tmYearInputEl.value?.focus?.())
+}
+
+function closeTimeMachine() {
+  isTimeMachineOpen.value = false
+  timeMachineError.value = ''
+}
+
+function applyTimeMachine() {
+  const y = Number(tmYear.value), m = Number(tmMonth.value), d = Number(tmDay.value)
+  if (!Number.isInteger(y) || y <= 0) { timeMachineError.value = '年份不合理'; return }
+  if (!Number.isInteger(m) || m < 1 || m > 12) { timeMachineError.value = '月份不合理'; return }
+  const maxDays = SolarUtil.getDaysOfMonth(y, m)
+  if (!Number.isInteger(d) || d < 1 || d > maxDays) { timeMachineError.value = `日期不合理`; return }
+
+  if (!sandboxSnapshot.value) sandboxSnapshot.value = captureCurrentState()
+  
+  const sandboxDate = makeLocalDate(y, m, d)
+  mockDateString.value = `${y}-${pad2(m)}-${pad2(d)}`
+  
+  const termKey = getTermPinyinForDate(sandboxDate)
+  suppressResourceRewards.value = true
+  codeLines.value = SANDBOX_CODE_LINES
+  highestRewardedThreshold.value = Math.max(0, Math.floor(SANDBOX_CODE_LINES / CODE_LINES_PER_REWARD))
+  nextTick(() => suppressResourceRewards.value = false)
+  
+  foodStock.value = highestRewardedThreshold.value * RESOURCE_PER_REWARD
+  waterStock.value = Math.min(highestRewardedThreshold.value, Math.floor(MAX_WATER_REWARDED_LINES / CODE_LINES_PER_REWARD)) * RESOURCE_PER_REWARD
+  feedCount.value = 0
+  waterCount.value = 0
+  todayPassed.value = 0
+  todayErrors.value = 0
+  plantWaterByTerm.value = { [termKey]: 0 }
+
+  isTimeMachineOpen.value = false
+  timeMachineError.value = ''
+  message.value = `⏳ 沙盘生效！前往 ${mockDateString.value}`
+  resetCatState(3000)
+}
+
+function exitTimeMachine() {
+  restoreSnapshot(sandboxSnapshot.value)
+  sandboxSnapshot.value = null
+  mockDateString.value = null
+  isTimeMachineOpen.value = false
+  message.value = '⏰ 退出沙盘，恢复现实时间！'
+  resetCatState(3000)
+}
+
+function getTermPinyinForDate(date) {
+  try {
+    const termName = (getSolarTerm(date) || '').trim()
+    return solarTermMap[termName] || DEFAULT_PLANT_TERM
+  } catch {
+    return DEFAULT_PLANT_TERM
+  }
+}
+
+// ==========================================
+// 8. 生命周期管理 (包含跨日重置校验)
+// ==========================================
 onMounted(() => {
   checkHash()
   window.addEventListener('hashchange', onHashChange)
 
   if (window.api?.onActivityUpdate) {
-    offActivityUpdate = window.api.onActivityUpdate((payload) => {
-      applyActivityUpdate(payload)
-    })
+    offActivityUpdate = window.api.onActivityUpdate(applyActivityUpdate)
   }
 
   if (window.api?.getLatestActivity) {
-    window.api.getLatestActivity().then((payload) => {
-      applyActivityUpdate(payload)
-    }).catch((error) => {
-      console.error('[CS Valley] Failed to load latest activity:', error)
-    })
+    window.api.getLatestActivity().then(applyActivityUpdate).catch(err => console.error('[CS Valley]', err))
   }
   
   updateUiScale()
   window.addEventListener('resize', updateUiScale)
 
+  // 初始化时校验跨日状态
+  if (lastFedDate.value === getTodayString()) {
+    catState.value = 'playing'
+    message.value = '⚽ 充满活力，玩球中！'
+  } else {
+    catState.value = 'idle'
+    message.value = '🐱 睡觉中...'
+  }
+
   timerId = setInterval(() => {
     now.value = new Date()
+
+    // 跨日重置逻辑：每分钟检查一次，发现是第二天则清除状态
+    const todayStr = getTodayString()
+    if (lastFedDate.value && lastFedDate.value !== todayStr) {
+      lastFedDate.value = ''
+      localStorage.removeItem('cs_valley_last_fed_date') 
+      
+      if (catState.value === 'playing') {
+        catState.value = 'idle'
+        message.value = '🐱 昨天玩累了，睡觉中...'
+      }
+    }
   }, 60000)
 })
 
@@ -565,9 +560,7 @@ onUnmounted(() => {
     offActivityUpdate()
     offActivityUpdate = null
   }
-  if (timerId) {
-    clearInterval(timerId)
-  }
+  if (timerId) clearInterval(timerId)
 })
 
 onBeforeUnmount(() => {
@@ -584,28 +577,17 @@ onBeforeUnmount(() => {
       style="-webkit-app-region: drag;"
       :style="isFloatingMode ? {} : { transform: `translate(-50%, -50%) scale(${uiScale})` }"
     >
-      <!-- 实时状态面板 -->
-      <div
-        v-show="!isFloatingMode"
-        class="stats-box"
-        :class="{ collapsed: !isStatsVisible }"
-        style="-webkit-app-region: no-drag;"
-      >
+      
+      <div v-show="!isFloatingMode" class="stats-box" :class="{ collapsed: !isStatsVisible }" style="-webkit-app-region: no-drag;">
         <div class="stats-header" @click="toggleStats">
           <span class="stats-title">实时状态</span>
           <span class="toggle-arrow">{{ isStatsVisible ? '▲' : '▼' }}</span>
         </div>
-        
         <div v-show="isStatsVisible" class="stats-content">
           <div class="stat-item">
             <span>代码行数: {{ codeLines }}</span>
             <div class="progress-bar">
-              <div 
-                v-for="i in 5" 
-                :key="i" 
-                class="grid" 
-                :class="{ active: i <= activeGridCount }"
-              ></div>
+              <div v-for="i in 5" :key="i" class="grid" :class="{ active: i <= activeGridCount }"></div>
             </div>
           </div>
           <div class="stat-detail">
@@ -623,22 +605,27 @@ onBeforeUnmount(() => {
         <h3> {{ currentDate }} · {{ currentSolarTerm }}</h3>
       </div>
 
-      <div
-        class="pet-area"
-        style="-webkit-app-region: no-drag;"
-      >
-        <div
-          class="bubble"
-          :style="{ top: bubbleTop }"
-          @dblclick.stop="handleRestore"
-        >{{ message }}</div>
+      <div class="pet-area" style="-webkit-app-region: no-drag;">
+        <div class="bubble" :style="{ top: bubbleTop }" @dblclick.stop="handleRestore">{{ message }}</div>
+        
         <div class="characters">
+          <div v-if="catState === 'playing'" class="toy-ball"></div>
+
           <img
             class="cat-image"
-            src="./assets/cat.png"
+            :class="{
+              'cat-idle': catState === 'idle',
+              'cat-eating': catState === 'eating',
+              'cat-happy': catState === 'happy',
+              'cat-refused': catState === 'refused',
+              'cat-playing': catState === 'playing'
+            }"
+            :src="currentCatImage"
             draggable="false"
+            @click="interactWithCat"
             :style="isFloatingMode ? '-webkit-app-region: drag; pointer-events: auto;' : ''"
           />
+
           <img
             v-show="!isFloatingMode"
             class="plant-image"
@@ -649,46 +636,26 @@ onBeforeUnmount(() => {
       </div>
 
       <div v-show="!isFloatingMode" class="action-panel" style="-webkit-app-region: no-drag;">
-        <button class="image-btn" @click="feedCat" aria-label="喂猫粮">
-          <img src="./assets/btn-feed.png" alt="喂猫粮" draggable="false">
-        </button>
-        <button class="image-btn" @click="waterPlant" aria-label="浇水">
-          <img src="./assets/btn-water.png" alt="浇水" draggable="false">
-        </button>
-        <button class="image-btn" @click="openGallery" aria-label="图鉴合集">
-          <img src="./assets/btn-gallery.png" alt="图鉴合集" draggable="false">
-        </button>
-        <button class="image-btn image-btn-settings" @click="openSettings" aria-label="设置">
-          <img src="./assets/btn-settings.png" alt="设置" draggable="false">
-        </button>
-        <button class="image-btn image-btn-weekly-report" @click="openWeeklyReport" aria-label="节气周报">
-          <img src="./assets/btn-weekly-report.png" alt="节气周报" draggable="false">
-        </button>
-        <button class="image-btn" @click="openTimeMachine" aria-label="沙盘模式">
-          <img src="./assets/btn_shapanmode.png" alt="沙盘模式" draggable="false">
-        </button>
+        <button class="image-btn" @click="feedCat" aria-label="喂猫粮"><img src="./assets/btn-feed.png" draggable="false"></button>
+        <button class="image-btn" @click="waterPlant" aria-label="浇水"><img src="./assets/btn-water.png" draggable="false"></button>
+        <button class="image-btn" @click="openGallery" aria-label="图鉴合集"><img src="./assets/btn-gallery.png" draggable="false"></button>
+        <button class="image-btn image-btn-settings" @click="openSettings" aria-label="设置"><img src="./assets/btn-settings.png" draggable="false"></button>
+        <button class="image-btn image-btn-weekly-report" @click="openWeeklyReport" aria-label="节气周报"><img src="./assets/btn-weekly-report.png" draggable="false"></button>
+        <button class="image-btn" @click="openTimeMachine" aria-label="沙盘模式"><img src="./assets/btn_shapanmode.png" draggable="false"></button>
       </div>
 
-      <div
-        v-if="isTimeMachineOpen && !isFloatingMode"
-        class="time-machine-mask"
-        style="-webkit-app-region: no-drag;"
-        @click.self="closeTimeMachine"
-      >
-        <div class="time-machine-panel" style="-webkit-app-region: no-drag;">
+      <div v-if="isTimeMachineOpen && !isFloatingMode" class="time-machine-mask" style="-webkit-app-region: no-drag;" @click.self="closeTimeMachine">
+        <div class="time-machine-panel">
           <div class="time-machine-title">沙盘模式</div>
-
           <div class="time-machine-inputs">
-            <input ref="tmYearInputEl" v-model.trim="tmYear" class="time-machine-input" inputmode="numeric" maxlength="4" placeholder="YYYY" aria-label="年份" @input="timeMachineError = ''" />
+            <input ref="tmYearInputEl" v-model.trim="tmYear" class="time-machine-input" inputmode="numeric" maxlength="4" placeholder="YYYY" @input="timeMachineError = ''" />
             <span class="time-machine-unit">年</span>
-            <input v-model.trim="tmMonth" class="time-machine-input" inputmode="numeric" maxlength="2" placeholder="MM" aria-label="月份" @input="timeMachineError = ''" />
+            <input v-model.trim="tmMonth" class="time-machine-input" inputmode="numeric" maxlength="2" placeholder="MM" @input="timeMachineError = ''" />
             <span class="time-machine-unit">月</span>
-            <input v-model.trim="tmDay" class="time-machine-input" inputmode="numeric" maxlength="2" placeholder="DD" aria-label="日期" @input="timeMachineError = ''" />
+            <input v-model.trim="tmDay" class="time-machine-input" inputmode="numeric" maxlength="2" placeholder="DD" @input="timeMachineError = ''" />
             <span class="time-machine-unit">日</span>
           </div>
-
           <div v-if="timeMachineError" class="time-machine-error">{{ timeMachineError }}</div>
-
           <div class="time-machine-actions">
             <button class="time-machine-btn" @click="applyTimeMachine">确认应用</button>
             <button class="time-machine-btn" @click="closeTimeMachine">取消</button>
@@ -696,11 +663,13 @@ onBeforeUnmount(() => {
           </div>
         </div>
       </div>
+
     </div>
   </div>
 </template>
 
 <style scoped>
+/* 原有的基础与布局样式 */
 .viewport-root {
   width: 100vw;
   height: 100vh;
@@ -744,7 +713,7 @@ onBeforeUnmount(() => {
 
 .pet-container.floating-mode .cat-image:hover {
   transform: none !important;
-}/*让悬浮窗里的猫不再放大*/
+}
 
 .pet-container.floating-mode {
   position: relative;
@@ -765,18 +734,18 @@ onBeforeUnmount(() => {
 
 .pet-container.floating-mode .bubble {
   left: 40% !important;
-  top: 30% !important; /*微调用*/ 
+  top: 30% !important; 
   transform: translate(-50%, -50%) !important;
   -webkit-app-region: no-drag !important;
-  z-index: 10 !important;          /* 提高层级 */
-  pointer-events: auto !important;/* 强制可点击 */
+  z-index: 10 !important;         
+  pointer-events: auto !important;
 }
 
 .pet-container.floating-mode .characters {
   left: 53% !important;
   top: 50% !important;
   transform: translate(-50%, -50%) !important;
-  z-index: 1 !important;           /* 放到气泡下层 */
+  z-index: 1 !important;           
 }
 
 .pet-container.floating-mode .pet-area {
@@ -786,9 +755,6 @@ onBeforeUnmount(() => {
   height: 400px;
 }
 
-/* ================= 修复：分离展开/折叠样式 ================= */
-
-/* --- 1. 基础样式（展开态）--- */
 .stats-box {
   position: absolute;
   top: 30px;
@@ -807,7 +773,6 @@ onBeforeUnmount(() => {
   z-index: 4;
 }
 
-/* --- 2. 展开态：标题栏位置（修复文字偏离问题）--- */
 .stats-header {
   position: absolute;
   top: 1px;
@@ -836,62 +801,33 @@ onBeforeUnmount(() => {
   text-shadow: 0 2px 3px rgba(40, 32, 18, 0.3);
 }
 
-/* --- 3. 折叠态：独立样式（修复图片大小问题）--- */
 .stats-box.collapsed {
-  /* 背景图切换 */
   background-image: url('./assets/stats-collapsed.png') !important;
   background-color: transparent;
   background-repeat: no-repeat;
   background-position: center;
-  
-  /* 关键：让容器适应图片大小，图片完整显示 */
   background-size: contain; 
-  overflow: visible; /* 允许图片超出容器一点点也没关系 */
-  
-  /* 尺寸：根据你的图片实际比例调整 */
-  width: 220px;   /* 增大宽度 */
-  height: 140px;  /* 增大高度 */
-  
-  /* 位置：与日历图标齐平 */
-  top: 10px;      /* 微调垂直对齐 */
-  left: 920px;    /* 保持水平位置 */
+  overflow: visible; 
+  width: 220px;   
+  height: 140px;  
+  top: 10px;      
+  left: 920px;    
   transform: none;
-  
   box-shadow: none;
 }
 
-/* 折叠态：隐藏文字，但保留点击区域 */
 .stats-box.collapsed .stats-header {
   position: absolute;
-  inset: 0; /* 铺满整个容器，确保点击区域完整 */
+  inset: 0; 
   width: 100%;
   height: 100%;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  opacity: 0; /* 完全透明 */
-  pointer-events: auto; /* 确保可点击 */
+  opacity: 0; 
+  pointer-events: auto; 
 }
 
-/* 折叠态：彻底隐藏文字和箭头 */
 .stats-box.collapsed .stats-title,
 .stats-box.collapsed .toggle-arrow {
   display: none;
-}
-
-.stats-title {
-  font-size: 25px;
-  font-weight: 400;
-  color: #f3efe5;
-  letter-spacing: 1px;
-  text-shadow: 0 2px 3px rgba(40, 32, 18, 0.3);
-}
-
-.toggle-arrow {
-  font-size: 22px;
-  color: #f3efe5;
-  text-shadow: 0 2px 3px rgba(40, 32, 18, 0.3);
 }
 
 .stats-content {
@@ -930,7 +866,6 @@ onBeforeUnmount(() => {
   font-size: 18px;
   color: #4a3f2f;
 }
-
 .stat-item span{
   color: #4a3f2f;
   font-size: 18px;
@@ -974,6 +909,7 @@ onBeforeUnmount(() => {
   pointer-events: none;
   z-index: 1;
 }
+
 .bubble {
   position: absolute;
   left: 43%;
@@ -1009,9 +945,12 @@ onBeforeUnmount(() => {
   filter: drop-shadow(0px 10px 10px rgba(0,0,0,0.5));
   transition: transform 0.2s;
   transform-origin: bottom center;
+  cursor: pointer; 
+  will-change: transform; 
 }
-.cat-image:hover {
-  transform: scale(1.1);
+
+.cat-idle:hover {
+  transform: scale(1.05); /* 因为已经是真实图片，hover放大倍数稍微减小以免失真 */
 }
 
 .plant-image {
@@ -1033,6 +972,7 @@ onBeforeUnmount(() => {
   gap: 10px;
   z-index: 4;
 }
+
 .image-btn {
   width: 150px;
   padding: 0;
@@ -1041,18 +981,6 @@ onBeforeUnmount(() => {
   line-height: 0;
   cursor: pointer;
   transition: transform 0.12s ease, filter 0.12s ease;
-}
-
-.image-btn-settings {
-  width: 150px;
-  margin-right: 0px;
-  margin-top: 0;
-}
-
-.image-btn-weekly-report {
-  width: 150px;
-  margin-right: 0;
-  margin-top: 0;
 }
 
 .image-btn img {
@@ -1118,10 +1046,6 @@ onBeforeUnmount(() => {
   outline: none;
 }
 
-.time-machine-unit {
-  font-size: 16px;
-}
-
 .time-machine-actions {
   display: flex;
   justify-content: center;
@@ -1159,6 +1083,89 @@ onBeforeUnmount(() => {
   background: rgba(238, 87, 87, 0.9);
   color: #fff;
   border-color: rgba(170, 45, 45, 0.75);
+}
+
+/* ==========================================
+   宠物交互道具与专属联动动画（优化结合实体图片）
+   ========================================== */
+
+/* --- 道具：玩具球 --- */
+/* 因为你有了专注看球(cat_watching.png)的状态，我们保留跳动的球，使其组合起来像玩球动作 */
+.toy-ball {
+  position: absolute;
+  left: -30px;
+  bottom: 80px;
+  width: 48px;
+  height: 48px;
+  background: radial-gradient(circle at 30% 30%, #ff6b6b, #c92a2a); 
+  border-radius: 50%;
+  box-shadow: 0 5px 5px rgba(0,0,0,0.4);
+  z-index: 2;
+  animation: ballRollBounce 1.5s linear infinite;
+}
+
+@keyframes ballRollBounce {
+  0%   { transform: translateX(0) translateY(0) rotate(0deg); }
+  20%  { transform: translateX(20px) translateY(-15px) rotate(90deg); } 
+  40%  { transform: translateX(40px) translateY(0) rotate(180deg); } 
+  60%  { transform: translateX(60px) translateY(-10px) rotate(270deg); } 
+  80%  { transform: translateX(70px) translateY(0) rotate(360deg); } 
+  100% { transform: translateX(0) translateY(0) rotate(0deg); } 
+}
+
+/* 1. 待机呼吸感 (配合 cat_sleep.png) */
+.cat-idle {
+  animation: breathe 3s ease-in-out infinite;
+}
+@keyframes breathe {
+  0%, 100% { transform: scale(1) translateY(0); }
+  50% { transform: scale(1.02) translateY(-3px); }
+}
+
+/* 2. 进食动作 (配合 cat_eat.png，只需轻微点头) */
+.cat-eating {
+  animation: eatingAction 0.6s ease-in-out infinite;
+}
+@keyframes eatingAction {
+  0%, 100% { transform: scale(1) translateY(0) rotate(0deg); }
+  50% { transform: scale(1.01) translateY(3px) rotate(1deg); } 
+}
+
+/* 3. 开心撒娇 (配合 cat_happy.png) */
+.cat-happy {
+  animation: happyBounce 0.8s ease-in-out infinite;
+}
+@keyframes happyBounce {
+  0%   { transform: scale(1) translateY(0); }
+  25%  { transform: scale(1.03) translateY(-6px) rotate(-2deg); }
+  50%  { transform: scale(0.97) translateY(2px) rotate(2deg); }
+  75%  { transform: scale(1.03) translateY(-3px) rotate(-1deg); }
+  100% { transform: scale(1) translateY(0); }
+}
+
+/* 4. 委屈拒绝 (配合 cat_sad.png) */
+.cat-refused {
+  animation: shakeHead 0.5s ease-in-out;
+}
+@keyframes shakeHead {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-4px) rotate(-1deg); }
+  75% { transform: translateX(4px) rotate(1deg); }
+}
+
+/* 5. 持续玩球状态 (配合 cat_watching.png 与玩具球联动) */
+.cat-playing {
+  animation: catPlayAction 1.5s linear infinite;
+}
+/* 调整为更轻微的追随动作，因为 watching 图片本身是静态专注的 */
+@keyframes catPlayAction {
+  0%   { transform: translateX(0) scaleX(1); } 
+  35%  { transform: translateX(10px) scaleX(1); } 
+  40%  { transform: translateX(20px) scaleX(1) translateY(-4px); } 
+  60%  { transform: translateX(30px) scaleX(1); } 
+  65%  { transform: translateX(30px) scaleX(1); } /* 保持原向专注看球 */
+  95%  { transform: translateX(0) scaleX(1) translateY(-2px); } 
+  100% { transform: translateX(0) scaleX(1); } 
 }
 </style>
 
