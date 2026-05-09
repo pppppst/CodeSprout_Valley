@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 // 引入对应的控制类和实体类
 import MonitorController from '../controllers/MonitorController.js';
-import User from '../models/User.js';
 
 describe('UC-CodeDetection 代码监测与资源结算逻辑测试', () => {
   let monitorController;

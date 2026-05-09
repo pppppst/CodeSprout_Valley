@@ -1,6 +1,7 @@
-<script setup>
+﻿<script setup>
 import { ref, computed, watch, onMounted, onUnmounted, onBeforeUnmount, nextTick } from 'vue'
 import { getActiveJieQi } from './utils/calendar'
+import { registerAccount, loginAccount, fetchCloudSave, syncCloudSave } from './utils/cloudApi'
 import WeatherEffect from './components/WeatherEffect.vue'
 import { SolarUtil } from 'lunar-javascript'
 
@@ -8,6 +9,135 @@ import { SolarUtil } from 'lunar-javascript'
 // 1. 悬浮窗与基础环境配置
 // ==========================================
 const isFloatingMode = ref(false)
+
+const authUsername = ref('')
+const authPassword = ref('')
+const authStatusMessage = ref('等待登录后同步云端存档')
+const cloudToken = ref(localStorage.getItem('codeSproutToken') || '')
+const loggedInUser = ref(localStorage.getItem('codeSproutUser') || '')
+const isCloudBusy = ref(false)
+const lastSyncTime = ref(localStorage.getItem('codeSproutLastSyncTime') || '')
+const isReportOpen = ref(false)
+
+function setAuthSession(token, username) {
+  cloudToken.value = token
+  loggedInUser.value = username
+  localStorage.setItem('codeSproutToken', token)
+  localStorage.setItem('codeSproutUser', username)
+}
+
+function clearAuthSession() {
+  cloudToken.value = ''
+  loggedInUser.value = ''
+  lastSyncTime.value = ''
+  localStorage.removeItem('codeSproutToken')
+  localStorage.removeItem('codeSproutUser')
+  localStorage.removeItem('codeSproutLastSyncTime')
+}
+
+function applyCloudSave(save) {
+  if (!save) return
+
+  const totalCodeLines = Number(save.totalCodeLines || 0)
+  codeLines.value = totalCodeLines
+  syncedCodeLines.value = totalCodeLines
+  foodStock.value = Number(save.catFood || 0)
+  waterStock.value = Number(save.waterDrops || 0)
+
+  if (save.lastSyncTime) {
+    lastSyncTime.value = new Date(save.lastSyncTime).toLocaleString()
+    localStorage.setItem('codeSproutLastSyncTime', lastSyncTime.value)
+  }
+}
+
+async function loadCloudSave() {
+  if (!cloudToken.value) return
+
+  const result = await fetchCloudSave(cloudToken.value)
+  applyCloudSave(result.data)
+}
+
+async function handleRegister() {
+  if (!authUsername.value.trim() || !authPassword.value) {
+    authStatusMessage.value = '用户名和密码不能为空'
+    return
+  }
+
+  isCloudBusy.value = true
+  authStatusMessage.value = '正在注册账号...'
+  try {
+    await registerAccount(authUsername.value.trim(), authPassword.value)
+    authStatusMessage.value = '注册成功，请点击登录'
+  } catch (error) {
+    authStatusMessage.value = `注册失败：${error.message}`
+  } finally {
+    isCloudBusy.value = false
+  }
+}
+
+async function handleLogin() {
+  if (!authUsername.value.trim() || !authPassword.value) {
+    authStatusMessage.value = '用户名和密码不能为空'
+    return
+  }
+
+  isCloudBusy.value = true
+  authStatusMessage.value = '正在登录并拉取云端存档...'
+  try {
+    const result = await loginAccount(authUsername.value.trim(), authPassword.value)
+    setAuthSession(result.token, result.username)
+    applyCloudSave(result.data)
+    await loadCloudSave()
+    authStatusMessage.value = '登录成功，云端存档已加载'
+  } catch (error) {
+    clearAuthSession()
+    authStatusMessage.value = `登录失败：${error.message}`
+  } finally {
+    isCloudBusy.value = false
+  }
+}
+
+async function handleCloudSync() {
+  if (!cloudToken.value) {
+    authStatusMessage.value = '请先登录账号再同步'
+    return
+  }
+
+  const linesToSync = Math.max(0, codeLines.value - syncedCodeLines.value)
+  const payload = {
+    addedLines: linesToSync,
+    catFood: foodStock.value,
+    waterDrops: waterStock.value,
+    plantStage: currentPlantStage.value
+  }
+
+  isCloudBusy.value = true
+  authStatusMessage.value = '正在同步云端存档...'
+  try {
+    const result = await syncCloudSave(cloudToken.value, payload)
+    applyCloudSave(result.data)
+    authStatusMessage.value = `同步完成，本次新增 ${linesToSync} 行代码`
+  } catch (error) {
+    if (error.status === 401) {
+      clearAuthSession()
+    }
+    authStatusMessage.value = `同步失败：${error.message}`
+  } finally {
+    isCloudBusy.value = false
+  }
+}
+
+function handleLogout() {
+  clearAuthSession()
+  authUsername.value = ''
+  authPassword.value = ''
+  codeLines.value = 0
+  syncedCodeLines.value = 0
+  foodStock.value = 0
+  waterStock.value = 0
+  authStatusMessage.value = '已退出登录，本地账号状态已清空'
+}
+
 
 const bubbleTop = computed(() => {
   return isFloatingMode.value ? '60%' : '69%'
@@ -47,6 +177,7 @@ function updateUiScale() {
 // 2. 核心业务与资源状态
 // ==========================================
 const codeLines = ref(150)
+const syncedCodeLines = ref(0);
 const catExp = ref(0)
 const message = ref('🐱 睡觉中...')
 
@@ -246,8 +377,12 @@ function openSettings() {
   resetCatState(2000)
 }
 function openWeeklyReport() {
+  isReportOpen.value = true
   message.value = '🗞️ 正在打开节气周报...'
   resetCatState(2000)
+}
+function closeWeeklyReport() {
+  isReportOpen.value = false
 }
 function toggleStats() {
   isStatsVisible.value = !isStatsVisible.value
@@ -324,9 +459,9 @@ const currentBgUrl = computed(() => {
 })
 
 function getPlantStageByWaterings(waterings) {
-  if (waterings >= 120) return 4
-  if (waterings >= 60) return 3
-  if (waterings >= 30) return 2
+  if (waterings >= 120) return 4//120
+  if (waterings >= 60) return 3//60
+  if (waterings >= 30) return 2//30
   return 1
 }
 
@@ -335,30 +470,420 @@ const currentPlantStage = computed(() => {
   return getPlantStageByWaterings(waterings)
 })
 
+const weeklyReport = computed(() => {
+  const totalActions = feedCount.value + waterCount.value
+  const totalChecks = todayPassed.value + todayErrors.value
+  const passRate = totalChecks === 0
+    ? '暂无检测记录'
+    : `${Math.round((todayPassed.value / totalChecks) * 100)}%`
+
+  return {
+    title: `${currentSolarTerm.value || '当前节气'}成长报告`,
+    date: currentDate.value,
+    owner: loggedInUser.value || '本地用户',
+    totalCodeLines: codeLines.value,
+    todayPassed: todayPassed.value,
+    todayErrors: todayErrors.value,
+    passRate,
+    totalActions,
+    plantStage: currentPlantStage.value,
+    syncText: lastSyncTime.value ? `最近同步：${lastSyncTime.value}` : '尚未完成云端同步',
+    summary: totalActions > 0
+      ? `本节气已照料 ${totalActions} 次，植物成长到第 ${currentPlantStage.value} 阶段。`
+      : `本节气植物处于第 ${currentPlantStage.value} 阶段，继续写代码和照料即可推进成长。`
+  }
+})
+
 const plantImageConfig = {
+  // 全局默认配置
   default: {
     width: '95px', left: '200px', bottom: '0px',
     transform: 'scale(5)', transformOrigin: 'bottom center'
   },
-  xiazhi: {
+
+  // ===================== 24节气 按顺序排列 =====================
+  // 春季节气
+  lichun: { // 立春
     default: {
-      width: '100px', left: '450px', bottom: '160px',
-      transform: 'scale(5.5)', transformOrigin: 'bottom center'
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(3.5)',
+      transformOrigin: 'bottom center'
+    },
+    stage1: {
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(2)',
+      transformOrigin: 'bottom center'
+    },
+    stage2: {
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(3)',
+      transformOrigin: 'bottom center'
+    },
+    stage3: {},
+    stage4: {}
+  },
+  yushui: { // 雨水
+    default: {
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(4)',
+      transformOrigin: 'bottom center'
+    },
+    stage1: {
+      bottom: '80px'
+    },
+    stage2: {
+      bottom: '170px'
+    },
+    stage3: {
+      bottom: '140px'
+    },
+    stage4: {}
+  },
+  jingzhe: { // 惊蛰
+    default: {
+      width: '100px',
+      left: '450px',
+      bottom: '180px',
+      transform: 'scale(4)',
+      transformOrigin: 'bottom center'
+    },
+    stage2: {
+      bottom: '120px'
+    },
+    stage1: {
+      width: '100px',
+      left: '450px',
+      bottom: '150px',
+      transform: 'scale(3)',
+      transformOrigin: 'bottom center'
+    },
+    stage3: {
+      bottom: '150px'
+    },
+    stage4: {}
+  },
+  chunfen: { // 春分
+    default: {
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(4)',
+      transformOrigin: 'bottom center'
+    },
+    stage1: {
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(2)',
+      transformOrigin: 'bottom center'
+    },
+    stage2: {
+      transform: 'scale(3)'
+    },
+    stage3: {},
+    stage4: {}
+  },
+  qingming: { // 清明
+    default: {
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(3.5)',
+      transformOrigin: 'bottom center'
+    },
+    stage1: {},
+    stage2: {
+      bottom: '150px'
+    },
+    stage3: {},
+    stage4: {}
+  },
+  guyu: { // 谷雨
+    default: {
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(4)',
+      transformOrigin: 'bottom center'
+    },
+    stage1: {
+      width: '100px',
+      left: '450px',
+      bottom: '100px',
+      transform: 'scale(4)',
+      transformOrigin: 'bottom center'
+    },
+    stage2: {
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(4)',
+      transformOrigin: 'bottom center'
+    },
+    stage3: {
+      width: '100px',
+      left: '450px',
+      bottom: '120px',
+      transform: 'scale(4)',
+      transformOrigin: 'bottom center'
+    },
+    stage4: {
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(3.5)',
+      transformOrigin: 'bottom center'
     }
   },
-  lixia: {
+
+  // 夏季节气
+  lixia: { // 立夏
     default: {
-      width: '100px', left: '450px', bottom: '160px',
-      transform: 'scale(4)', transformOrigin: 'bottom center'
-    }
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(4)',
+      transformOrigin: 'bottom center'
+    },
+    stage1: {},
+    stage2: {},
+    stage3: {},
+    stage4: {}
   },
-  lichun: {
+  xiaoman: { // 小满
     default: {
-      width: '100px', left: '450px', bottom: '160px',
-      transform: 'scale(4)', transformOrigin: 'bottom center'
-    }
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(4)',
+      transformOrigin: 'bottom center'
+    },
+    stage1: {},
+    stage2: {},
+    stage3: {},
+    stage4: {}
+  },
+  mangzhong: { // 芒种
+    default: {
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(4)',
+      transformOrigin: 'bottom center'
+    },
+    stage1: {},
+    stage2: {},
+    stage3: {},
+    stage4: {}
+  },
+  xiazhi: { // 夏至
+    default: {
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(5.5)',
+      transformOrigin: 'bottom center'
+    },
+    stage1: {},
+    stage2: {},
+    stage3: {},
+    stage4: {}
+  },
+  xiaoshu: { // 小暑
+    default: {
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(4)',
+      transformOrigin: 'bottom center'
+    },
+    stage1: {},
+    stage2: {},
+    stage3: {},
+    stage4: {}
+  },
+  dashu: { // 大暑
+    default: {
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(4)',
+      transformOrigin: 'bottom center'
+    },
+    stage1: {},
+    stage2: {},
+    stage3: {},
+    stage4: {}
+  },
+
+  // 秋季节气
+  liqiu: { // 立秋
+    default: {
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(4)',
+      transformOrigin: 'bottom center'
+    },
+    stage1: {},
+    stage2: {},
+    stage3: {},
+    stage4: {}
+  },
+  chushu: { // 处暑
+    default: {
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(4)',
+      transformOrigin: 'bottom center'
+    },
+    stage1: {},
+    stage2: {},
+    stage3: {},
+    stage4: {}
+  },
+  bailu: { // 白露
+    default: {
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(4)',
+      transformOrigin: 'bottom center'
+    },
+    stage1: {},
+    stage2: {},
+    stage3: {},
+    stage4: {}
+  },
+  qiufen: { // 秋分
+    default: {
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(4)',
+      transformOrigin: 'bottom center'
+    },
+    stage1: {},
+    stage2: {},
+    stage3: {},
+    stage4: {}
+  },
+  hanlu: { // 寒露
+    default: {
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(4)',
+      transformOrigin: 'bottom center'
+    },
+    stage1: {},
+    stage2: {},
+    stage3: {},
+    stage4: {}
+  },
+  shuangjiang: { // 霜降
+    default: {
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(4)',
+      transformOrigin: 'bottom center'
+    },
+    stage1: {},
+    stage2: {},
+    stage3: {},
+    stage4: {}
+  },
+
+  // 冬季节气
+  lidong: { // 立冬
+    default: {
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(4)',
+      transformOrigin: 'bottom center'
+    },
+    stage1: {},
+    stage2: {},
+    stage3: {},
+    stage4: {}
+  },
+  xiaoxue: { // 小雪
+    default: {
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(4)',
+      transformOrigin: 'bottom center'
+    },
+    stage1: {},
+    stage2: {},
+    stage3: {},
+    stage4: {}
+  },
+  daxue: { // 大雪
+    default: {
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(4)',
+      transformOrigin: 'bottom center'
+    },
+    stage1: {},
+    stage2: {},
+    stage3: {},
+    stage4: {}
+  },
+  dongzhi: { // 冬至
+    default: {
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(4)',
+      transformOrigin: 'bottom center'
+    },
+    stage1: {},
+    stage2: {},
+    stage3: {},
+    stage4: {}
+  },
+  xiaohan: { // 小寒
+    default: {
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(4)',
+      transformOrigin: 'bottom center'
+    },
+    stage1: {},
+    stage2: {},
+    stage3: {},
+    stage4: {}
+  },
+  dahan: { // 大寒
+    default: {
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(4)',
+      transformOrigin: 'bottom center'
+    },
+    stage1: {},
+    stage2: {},
+    stage3: {},
+    stage4: {}
   }
-}
+};
 
 function getPlantImageUrl(termKey, stage) {
   const imageKey = `./assets/${termKey}/stage${stage}.png`
@@ -524,6 +1049,17 @@ onMounted(() => {
   if (window.api?.getLatestActivity) {
     window.api.getLatestActivity().then(applyActivityUpdate).catch(err => console.error('[CS Valley]', err))
   }
+
+  if (cloudToken.value) {
+    loadCloudSave()
+      .then(() => {
+        authStatusMessage.value = '已恢复登录状态，云端存档已加载'
+      })
+      .catch((error) => {
+        clearAuthSession()
+        authStatusMessage.value = `登录状态失效：${error.message}`
+      })
+  }
   
   updateUiScale()
   window.addEventListener('resize', updateUiScale)
@@ -569,6 +1105,29 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
+  <div v-show="!isFloatingMode" class="cloud-panel" style="-webkit-app-region: no-drag;">
+    <div class="cloud-panel-title">云端账号</div>
+
+    <div v-if="loggedInUser" class="cloud-user-card">
+      <div class="cloud-user-name">{{ loggedInUser }}</div>
+      <div class="cloud-user-meta">{{ lastSyncTime ? `最近同步：${lastSyncTime}` : '' }}</div>
+      <div class="cloud-actions">
+        <button class="cloud-btn primary" :disabled="isCloudBusy" @click="handleCloudSync">同步</button>
+        <button class="cloud-btn danger" :disabled="isCloudBusy" @click="handleLogout">退出</button>
+      </div>
+    </div>
+
+    <div v-else class="cloud-login-form">
+      <input v-model.trim="authUsername" class="cloud-input" placeholder="用户名" />
+      <input v-model="authPassword" class="cloud-input" type="password" placeholder="密码（至少 6 位）" />
+      <div class="cloud-actions">
+        <button class="cloud-btn secondary" :disabled="isCloudBusy" @click="handleRegister">注册</button>
+        <button class="cloud-btn primary" :disabled="isCloudBusy" @click="handleLogin">登录</button>
+      </div>
+    </div>
+
+    <div class="cloud-status">{{ authStatusMessage }}</div>
+  </div>
   <div class="viewport-root" :class="{ 'floating-root': isFloatingMode }" :style="{ backgroundImage: `url(${currentBgUrl})` }">
     <WeatherEffect v-show="!isFloatingMode" :type="currentWeatherType" />
     <div 
@@ -577,8 +1136,12 @@ onBeforeUnmount(() => {
       style="-webkit-app-region: drag;"
       :style="isFloatingMode ? {} : { transform: `translate(-50%, -50%) scale(${uiScale})` }"
     >
-      
-      <div v-show="!isFloatingMode" class="stats-box" :class="{ collapsed: !isStatsVisible }" style="-webkit-app-region: no-drag;">
+      <div
+        v-show="!isFloatingMode"
+        class="stats-box"
+        :class="{ collapsed: !isStatsVisible }"
+        style="-webkit-app-region: no-drag;"
+      >
         <div class="stats-header" @click="toggleStats">
           <span class="stats-title">实时状态</span>
           <span class="toggle-arrow">{{ isStatsVisible ? '▲' : '▼' }}</span>
@@ -644,8 +1207,43 @@ onBeforeUnmount(() => {
         <button class="image-btn" @click="openTimeMachine" aria-label="沙盘模式"><img src="./assets/btn_shapanmode.png" draggable="false"></button>
       </div>
 
-      <div v-if="isTimeMachineOpen && !isFloatingMode" class="time-machine-mask" style="-webkit-app-region: no-drag;" @click.self="closeTimeMachine">
-        <div class="time-machine-panel">
+      <div
+        v-if="isReportOpen && !isFloatingMode"
+        class="report-mask"
+        style="-webkit-app-region: no-drag;"
+        @click.self="closeWeeklyReport"
+      >
+        <section class="report-panel">
+          <div class="report-header">
+            <div>
+              <p class="report-date">{{ weeklyReport.date }}</p>
+              <h2>{{ weeklyReport.title }}</h2>
+            </div>
+            <button class="report-close" @click="closeWeeklyReport">×</button>
+          </div>
+
+          <p class="report-summary">{{ weeklyReport.summary }}</p>
+
+          <div class="report-grid">
+            <div class="report-item"><span>累计代码</span><strong>{{ weeklyReport.totalCodeLines }}</strong></div>
+            <div class="report-item"><span>通过率</span><strong>{{ weeklyReport.passRate }}</strong></div>
+            <div class="report-item"><span>今日通过</span><strong>{{ weeklyReport.todayPassed }}</strong></div>
+            <div class="report-item"><span>今日报错</span><strong>{{ weeklyReport.todayErrors }}</strong></div>
+            <div class="report-item"><span>照料次数</span><strong>{{ weeklyReport.totalActions }}</strong></div>
+            <div class="report-item"><span>植物阶段</span><strong>{{ weeklyReport.plantStage }}</strong></div>
+          </div>
+
+          <div class="report-footer"><span>{{ weeklyReport.owner }}</span><span>{{ weeklyReport.syncText }}</span></div>
+        </section>
+      </div>
+
+      <div
+        v-if="isTimeMachineOpen && !isFloatingMode"
+        class="time-machine-mask"
+        style="-webkit-app-region: no-drag;"
+        @click.self="closeTimeMachine"
+      >
+        <div class="time-machine-panel" style="-webkit-app-region: no-drag;">
           <div class="time-machine-title">沙盘模式</div>
           <div class="time-machine-inputs">
             <input ref="tmYearInputEl" v-model.trim="tmYear" class="time-machine-input" inputmode="numeric" maxlength="4" placeholder="YYYY" @input="timeMachineError = ''" />
@@ -684,6 +1282,34 @@ onBeforeUnmount(() => {
   background: transparent !important;
   background-image: none !important;
 }
+
+.cloud-panel {
+  position: absolute;
+  top: 24px;
+  left: 24px;
+  z-index: 9999;
+  width: 270px;
+  padding: 14px;
+  color: #3f4a38;
+  background: rgba(250, 252, 242, 0.94);
+  border: 1px solid rgba(87, 124, 87, 0.28);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(45, 58, 39, 0.18);
+  font-family: "Microsoft YaHei", sans-serif;
+}
+
+.cloud-panel-title { margin-bottom: 10px; color: #3f6d4a; font-size: 16px; }
+.cloud-login-form, .cloud-user-card { display: grid; gap: 8px; }
+.cloud-input { width: 100%; box-sizing: border-box; padding: 8px 10px; border: 1px solid rgba(88, 117, 93, 0.38); border-radius: 6px; color: #344235; background: rgba(255, 255, 255, 0.86); outline: none; }
+.cloud-user-name { font-size: 15px; color: #2f5d3a; }
+.cloud-user-meta { min-height: 16px; color: #6b7568; font-size: 12px; }
+.cloud-actions { display: flex; gap: 8px; }
+.cloud-btn { flex: 1; padding: 8px 10px; border: 0; border-radius: 6px; color: white; cursor: pointer; }
+.cloud-btn:disabled { cursor: wait; opacity: 0.6; }
+.cloud-btn.primary { background: #4f8f5f; }
+.cloud-btn.secondary { background: #5b87b4; }
+.cloud-btn.danger { background: #b75b54; }
+.cloud-status { margin-top: 10px; padding: 8px; border-left: 3px solid #7ea56d; border-radius: 6px; background: rgba(239, 244, 229, 0.86); color: #4d5a45; font-size: 12px; line-height: 1.4; }
 
 .pet-container {
   --ui-bg: rgba(134, 212, 152, 0.88);
@@ -1000,6 +1626,19 @@ onBeforeUnmount(() => {
   filter: brightness(0.98);
   transform: translateY(2px);
 }
+
+.report-mask { position: absolute; inset: 0; z-index: 12; display: flex; align-items: center; justify-content: center; background: rgba(40, 32, 18, 0.28); pointer-events: auto; }
+.report-panel { width: 560px; padding: 22px; border: 1px solid rgba(84, 78, 62, 0.4); border-radius: 8px; background: rgba(253, 250, 240, 0.96); color: #4e4230; box-shadow: 0 18px 42px rgba(44, 36, 20, 0.22); }
+.report-header { display: flex; justify-content: space-between; gap: 16px; }
+.report-header h2 { margin: 3px 0 0; font-size: 24px; color: #3f6d4a; }
+.report-date { margin: 0; color: #7a6c55; font-size: 13px; }
+.report-close { width: 32px; height: 32px; border: 0; border-radius: 50%; color: #5d4f3c; background: rgba(98, 82, 53, 0.1); cursor: pointer; font-size: 22px; line-height: 1; }
+.report-summary { margin: 16px 0; color: #5a513f; line-height: 1.6; }
+.report-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.report-item { min-height: 74px; padding: 12px; border: 1px solid rgba(93, 116, 76, 0.22); border-radius: 8px; background: rgba(244, 247, 232, 0.78); }
+.report-item span { display: block; color: #77705f; font-size: 12px; }
+.report-item strong { display: block; margin-top: 8px; color: #3d5f42; font-size: 22px; }
+.report-footer { display: flex; justify-content: space-between; gap: 12px; margin-top: 16px; color: #756d5c; font-size: 12px; }
 
 .time-machine-mask {
   position: absolute;
