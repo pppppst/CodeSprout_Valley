@@ -838,10 +838,34 @@ const plantImageConfig = {
       transform: 'scale(4)',
       transformOrigin: 'bottom center'
     },
-    stage1: {},
-    stage2: {},
-    stage3: {},
-    stage4: {}
+    stage1: {
+      width: '100px',
+      left: '450px',
+      bottom: '170px',
+      transform: 'scale(2)',
+      transformOrigin: 'bottom center'
+    },
+    stage2: {
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(2.5)',
+      transformOrigin: 'bottom center'
+    },
+    stage3: {
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(3)',
+      transformOrigin: 'bottom center'
+    },
+    stage4: {
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(3.5)',
+      transformOrigin: 'bottom center'
+    }
   },
   chushu: { // 处暑
     default: {
@@ -851,10 +875,34 @@ const plantImageConfig = {
       transform: 'scale(4)',
       transformOrigin: 'bottom center'
     },
-    stage1: {},
-    stage2: {},
-    stage3: {},
-    stage4: {}
+    stage1: {
+      width: '100px',
+      left: '450px',
+      bottom: '170px',
+      transform: 'scale(1.5)',
+      transformOrigin: 'bottom center'
+    },
+    stage2: {
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(2.5)',
+      transformOrigin: 'bottom center'
+    },
+    stage3: {
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(2.5)',
+      transformOrigin: 'bottom center'
+    },
+    stage4: {
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(2.8)',
+      transformOrigin: 'bottom center'
+    }
   },
   bailu: { // 白露
     default: {
@@ -864,10 +912,34 @@ const plantImageConfig = {
       transform: 'scale(4)',
       transformOrigin: 'bottom center'
     },
-    stage1: {},
-    stage2: {},
-    stage3: {},
-    stage4: {}
+    stage1: {
+      width: '100px',
+      left: '450px',
+      bottom: '170px',
+      transform: 'scale(1.5)',
+      transformOrigin: 'bottom center'
+    },
+    stage2: {
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(2)',
+      transformOrigin: 'bottom center'
+    },
+    stage3: {
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(2.5)',
+      transformOrigin: 'bottom center'
+    },
+    stage4: {
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(2.5)',
+      transformOrigin: 'bottom center'
+    }
   },
   qiufen: { // 秋分
     default: {
@@ -877,10 +949,34 @@ const plantImageConfig = {
       transform: 'scale(4)',
       transformOrigin: 'bottom center'
     },
-    stage1: {},
-    stage2: {},
-    stage3: {},
-    stage4: {}
+    stage1: {
+      width: '100px',
+      left: '450px',
+      bottom: '170px',
+      transform: 'scale(1.5)',
+      transformOrigin: 'bottom center'
+    },
+    stage2: {
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(1.8)',
+      transformOrigin: 'bottom center'
+    },
+    stage3: {
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(2.2)',
+      transformOrigin: 'bottom center'
+    },
+    stage4: {
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(2)',
+      transformOrigin: 'bottom center'
+    }
   },
   hanlu: { // 寒露
     default: {
@@ -890,10 +986,34 @@ const plantImageConfig = {
       transform: 'scale(4)',
       transformOrigin: 'bottom center'
     },
-    stage1: {},
-    stage2: {},
-    stage3: {},
-    stage4: {}
+    stage1: {
+      width: '100px',
+      left: '450px',
+      bottom: '170px',
+      transform: 'scale(2)',
+      transformOrigin: 'bottom center'
+    },
+    stage2: {
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(3)',
+      transformOrigin: 'bottom center'
+    },
+    stage3: {
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(3)',
+      transformOrigin: 'bottom center'
+    },
+    stage4: {
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(3.5)',
+      transformOrigin: 'bottom center'
+    }
   },
   shuangjiang: { // 霜降
     default: {
@@ -903,10 +1023,34 @@ const plantImageConfig = {
       transform: 'scale(4)',
       transformOrigin: 'bottom center'
     },
-    stage1: {},
-    stage2: {},
-    stage3: {},
-    stage4: {}
+    stage1: {
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(2)',
+      transformOrigin: 'bottom center'
+    },
+    stage2: {
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(2)',
+      transformOrigin: 'bottom center'
+    },
+    stage3: {
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(2.5)',
+      transformOrigin: 'bottom center'
+    },
+    stage4: {
+      width: '100px',
+      left: '450px',
+      bottom: '160px',
+      transform: 'scale(2)',
+      transformOrigin: 'bottom center'
+    }
   },
 
   // 冬季节气
