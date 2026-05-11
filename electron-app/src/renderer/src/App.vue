@@ -521,9 +521,9 @@ const currentBgUrl = computed(() => {
 })
 
 function getPlantStageByWaterings(waterings) {
-  if (waterings >= 120) return 4//120
-  if (waterings >= 60) return 3//60
-  if (waterings >= 30) return 2//30
+  if (waterings >= 120) return 4 // 120
+  if (waterings >= 60) return 3 // 60
+  if (waterings >= 30) return 2 // 30
   return 1
 }
 
@@ -2092,30 +2092,53 @@ onBeforeUnmount(() => {
   line-height: 1;
 }
 
-.gallery-grid {
+.gallery-grid,
+.term-report-grid {
   display: grid;
-  grid-template-columns: repeat(6, 1fr);
-  grid-template-rows: repeat(4, 104px);
-  gap: 10px;
+  grid-template-columns: repeat(6, 96px);
+  grid-template-rows: repeat(4, 88px);
+  justify-content: center;
+  gap: 8px;
 }
 
-.gallery-cell {
+.gallery-cell,
+.term-report-cell {
   position: relative;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: flex-start;
   gap: 4px;
   min-width: 0;
-  padding: 8px 6px;
-  border: 2px solid rgba(76, 42, 20, 0.78);
+  padding: 7px 6px;
+  border: 2px solid #3e2211;
   border-radius: 6px;
+  /* 核心：木纹与老旧质感 */
   background:
-    linear-gradient(135deg, rgba(255,255,255,0.12), rgba(0,0,0,0.08)),
-    #b17842;
-  box-shadow: inset 0 2px 0 rgba(255,255,255,0.16), inset 0 -4px 0 rgba(74, 41, 21, 0.18);
-  color: #fff1c8;
+    /* 压暗边缘，模拟岁月痕迹与环境光 */
+    radial-gradient(circle at center, transparent 30%, rgba(30, 15, 5, 0.5) 100%),
+    /* 模拟老木头的纵向粗糙木纹 */
+    repeating-linear-gradient(88deg, rgba(0, 0, 0, 0.05) 0, rgba(0, 0, 0, 0.05) 1px, transparent 1px, transparent 6px),
+    /* 基础沉稳的深棕色老木头底色 */
+    linear-gradient(135deg, #7c4f2a 0%, #5d381c 50%, #4a2a12 100%);
+  /* 外阴影塑造整体微凸，内阴影（inset）塑造强烈的深邃坑洞感 */
+  box-shadow:
+    0 4px 6px rgba(0, 0, 0, 0.3),
+    inset 4px 4px 8px rgba(0, 0, 0, 0.65), /* 左上重阴影 */
+    inset -2px -2px 4px rgba(255, 255, 255, 0.08); /* 右下微弱反光 */
+  color: #000;
   cursor: default;
+}
+
+.gallery-cell::before,
+.term-report-cell::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 2px;
+  background: radial-gradient(circle at 50% 50%, transparent 40%, rgba(0, 0, 0, 0.4) 100%);
+  pointer-events: none;
 }
 
 .gallery-cell.harvested {
@@ -2130,21 +2153,28 @@ onBeforeUnmount(() => {
   animation: harvestCellGlow 1.2s ease-in-out infinite;
 }
 
-.gallery-term {
+.gallery-term,
+.term-report-name {
+  position: relative;
+  z-index: 1;
   width: 100%;
   overflow: hidden;
-  color: #fff4d3;
-  font-size: 15px;
+  color: #1f140b;
+  font-family: KaiTi, STKaiti, "KaiTi_GB2312", serif;
+  font-size: 14px;
+  font-weight: 700;
   line-height: 1.2;
   text-align: center;
   text-overflow: ellipsis;
   white-space: nowrap;
-  text-shadow: 0 1px 0 rgba(62, 32, 14, 0.7);
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.15);
 }
 
 .gallery-harvest-img {
-  width: 66px;
-  height: 66px;
+  position: relative;
+  z-index: 1;
+  width: 58px;
+  height: 58px;
   object-fit: contain;
   filter: drop-shadow(0 4px 4px rgba(63, 33, 12, 0.32));
 }
@@ -2270,32 +2300,6 @@ onBeforeUnmount(() => {
   line-height: 1;
 }
 
-.term-report-grid {
-  display: grid;
-  grid-template-columns: repeat(6, 1fr);
-  grid-template-rows: repeat(4, 104px);
-  gap: 10px;
-}
-
-.term-report-cell {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: flex-start;
-  gap: 6px;
-  min-width: 0;
-  padding: 8px 6px;
-  border: 2px solid rgba(76, 42, 20, 0.78);
-  border-radius: 6px;
-  background:
-    linear-gradient(135deg, rgba(255,255,255,0.12), rgba(0,0,0,0.08)),
-    #b17842;
-  box-shadow: inset 0 2px 0 rgba(255,255,255,0.16), inset 0 -4px 0 rgba(74, 41, 21, 0.18);
-  color: #fff1c8;
-  cursor: default;
-}
-
 .term-report-cell.recorded {
   cursor: pointer;
 }
@@ -2308,24 +2312,13 @@ onBeforeUnmount(() => {
   animation: harvestCellGlow 1.2s ease-in-out infinite;
 }
 
-.term-report-name {
-  width: 100%;
-  overflow: hidden;
-  color: #fff4d3;
-  font-size: 15px;
-  line-height: 1.2;
-  text-align: center;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  text-shadow: 0 1px 0 rgba(62, 32, 14, 0.7);
-}
-
 .paper-scroll {
   position: relative;
+  z-index: 1;
   display: block;
-  width: 68px;
-  height: 50px;
-  margin-top: 3px;
+  width: 58px;
+  height: 43px;
+  margin-top: 2px;
   filter: drop-shadow(0 5px 5px rgba(63, 33, 12, 0.32));
 }
 
@@ -2333,28 +2326,28 @@ onBeforeUnmount(() => {
 .paper-scroll::after {
   content: "";
   position: absolute;
-  top: 9px;
-  width: 16px;
-  height: 32px;
+  top: 8px;
+  width: 14px;
+  height: 27px;
   border-radius: 999px;
   background: linear-gradient(90deg, #8b5730, #c99554 48%, #7a4527);
   box-shadow: inset 0 0 0 2px rgba(86, 48, 24, 0.28);
 }
 
 .paper-scroll::before {
-  left: 3px;
+  left: 2px;
 }
 
 .paper-scroll::after {
-  right: 3px;
+  right: 2px;
 }
 
 .paper-scroll-body {
   position: absolute;
-  left: 13px;
-  top: 12px;
-  width: 42px;
-  height: 26px;
+  left: 11px;
+  top: 11px;
+  width: 36px;
+  height: 22px;
   border-radius: 4px;
   background:
     repeating-linear-gradient(0deg, rgba(128, 86, 39, 0.16) 0, rgba(128, 86, 39, 0.16) 1px, transparent 1px, transparent 6px),
