@@ -18,6 +18,13 @@ const loggedInUser = ref(localStorage.getItem('codeSproutUser') || '')
 const isCloudBusy = ref(false)
 const lastSyncTime = ref(localStorage.getItem('codeSproutLastSyncTime') || '')
 const isReportOpen = ref(false)
+const isGalleryOpen = ref(false)
+const hasNewHarvest = ref(false)
+const hasNewReport = ref(false)
+const selectedHarvestTermKey = ref('')
+const selectedReportTermKey = ref('')
+const latestHarvestTermKey = ref('')
+const latestReportTermKey = ref('')
 
 function setAuthSession(token, username) {
   cloudToken.value = token
@@ -369,8 +376,21 @@ watch(rewardedCodeThreshold, (newValue) => {
 // 5. 辅助功能 (图鉴、设置、周报)
 // ==========================================
 function openGallery() {
+  isGalleryOpen.value = true
+  hasNewHarvest.value = false
   message.value = '📖 正在打开节气图鉴...'
   resetCatState(2000)
+}
+function closeGallery() {
+  isGalleryOpen.value = false
+  selectedHarvestTermKey.value = ''
+}
+function openHarvestDetail(termKey) {
+  if (!harvestRecords.value[termKey]) return
+  selectedHarvestTermKey.value = termKey
+}
+function closeHarvestDetail() {
+  selectedHarvestTermKey.value = ''
 }
 function openSettings() {
   message.value = '⚙️ 正在打开设置...'
@@ -378,11 +398,20 @@ function openSettings() {
 }
 function openWeeklyReport() {
   isReportOpen.value = true
+  hasNewReport.value = false
   message.value = '🗞️ 正在打开节气周报...'
   resetCatState(2000)
 }
 function closeWeeklyReport() {
   isReportOpen.value = false
+  selectedReportTermKey.value = ''
+}
+function openReportDetail(termKey) {
+  if (!reportRecords.value[termKey]) return
+  selectedReportTermKey.value = termKey
+}
+function closeReportDetail() {
+  selectedReportTermKey.value = ''
 }
 function toggleStats() {
   isStatsVisible.value = !isStatsVisible.value
@@ -436,6 +465,13 @@ const solarTermMap = {
   '寒露': 'hanlu', '霜降': 'shuangjiang', '立冬': 'lidong', '小雪': 'xiaoxue',
   '大雪': 'daxue', '冬至': 'dongzhi', '小寒': 'xiaohan', '大寒': 'dahan'
 }
+const solarTermNames = Object.keys(solarTermMap)
+const solarTermEntries = solarTermNames.map((name) => ({ name, key: solarTermMap[name] }))
+const plantAssetTermAliases = {
+  bailu: 'Bailu',
+  hanlu: 'Hanlu',
+  qiufen: 'Qiufen'
+}
 
 const DEFAULT_PLANT_TERM = 'xiazhi'
 const DEFAULT_PLANT_STAGE = 1
@@ -443,6 +479,32 @@ const plantImageModules = import.meta.glob('./assets/*/stage*.png', {
   eager: true,
   import: 'default'
 })
+const harvestImages = {
+  seedling: new URL('./assets/harvest/harvest-seedling.png', import.meta.url).href,
+  mature: new URL('./assets/harvest/harvest-mature.png', import.meta.url).href,
+  premium: new URL('./assets/harvest/harvest-premium.png', import.meta.url).href
+}
+const harvestTierRank = {
+  seedling: 1,
+  mature: 2,
+  premium: 3
+}
+const harvestCopy = {
+  seedling: {
+    itemName: '节气小苗',
+    message: '这是你收获的节气小苗，继续加油！'
+  },
+  mature: {
+    itemName: '成熟花果',
+    message: '这是你收获的成熟花果，很棒哦！'
+  },
+  premium: {
+    itemName: '漂亮花果',
+    message: '这是你收获的漂亮花果，太棒啦！'
+  }
+}
+const harvestRecords = ref({})
+const reportRecords = ref({})
 
 const currentTermPinyin = computed(() => {
   const termName = (currentSolarTerm.value || '').trim()
@@ -465,33 +527,41 @@ function getPlantStageByWaterings(waterings) {
   return 1
 }
 
+function getHarvestTierByStage(stage) {
+  if (stage >= 4) return 'premium'
+  if (stage >= 3) return 'mature'
+  return 'seedling'
+}
+
 const currentPlantStage = computed(() => {
   const waterings = plantWaterByTerm.value[currentTermPinyin.value] || 0
   return getPlantStageByWaterings(waterings)
 })
 
-const weeklyReport = computed(() => {
-  const totalActions = feedCount.value + waterCount.value
-  const totalChecks = todayPassed.value + todayErrors.value
-  const passRate = totalChecks === 0
-    ? '暂无检测记录'
-    : `${Math.round((todayPassed.value / totalChecks) * 100)}%`
+const selectedHarvestRecord = computed(() => {
+  if (!selectedHarvestTermKey.value) return null
+  return harvestRecords.value[selectedHarvestTermKey.value] || null
+})
 
-  return {
-    title: `${currentSolarTerm.value || '当前节气'}成长报告`,
-    date: currentDate.value,
-    owner: loggedInUser.value || '本地用户',
-    totalCodeLines: codeLines.value,
-    todayPassed: todayPassed.value,
-    todayErrors: todayErrors.value,
-    passRate,
-    totalActions,
-    plantStage: currentPlantStage.value,
-    syncText: lastSyncTime.value ? `最近同步：${lastSyncTime.value}` : '尚未完成云端同步',
-    summary: totalActions > 0
-      ? `本节气已照料 ${totalActions} 次，植物成长到第 ${currentPlantStage.value} 阶段。`
-      : `本节气植物处于第 ${currentPlantStage.value} 阶段，继续写代码和照料即可推进成长。`
-  }
+const selectedReportRecord = computed(() => {
+  if (!selectedReportTermKey.value) return null
+  return reportRecords.value[selectedReportTermKey.value] || null
+})
+
+const galleryCells = computed(() => {
+  return solarTermEntries.map((term) => ({
+    ...term,
+    record: harvestRecords.value[term.key] || null,
+    isLatest: latestHarvestTermKey.value === term.key
+  }))
+})
+
+const reportCells = computed(() => {
+  return solarTermEntries.map((term) => ({
+    ...term,
+    record: reportRecords.value[term.key] || null,
+    isLatest: latestReportTermKey.value === term.key
+  }))
 })
 
 const plantImageConfig = {
@@ -1030,7 +1100,8 @@ const plantImageConfig = {
 };
 
 function getPlantImageUrl(termKey, stage) {
-  const imageKey = `./assets/${termKey}/stage${stage}.png`
+  const assetTermKey = plantAssetTermAliases[termKey] || termKey
+  const imageKey = `./assets/${assetTermKey}/stage${stage}.png`
   const fallbackKey = `./assets/${DEFAULT_PLANT_TERM}/stage${DEFAULT_PLANT_STAGE}.png`
 
   if (plantImageModules[imageKey]) return plantImageModules[imageKey]
@@ -1059,6 +1130,7 @@ const isTimeMachineOpen = ref(false)
 const tmYear = ref('')
 const tmMonth = ref('')
 const tmDay = ref('')
+const tmSettlementWaterings = ref(0)
 const timeMachineError = ref('')
 const tmYearInputEl = ref(null)
 const sandboxSnapshot = ref(null)
@@ -1072,6 +1144,29 @@ function parseYmdString(ymd) {
 }
 function makeLocalDate(y, m, d) { return new Date(y, m - 1, d) }
 function isValidDateObj(dt) { return dt instanceof Date && !Number.isNaN(dt.getTime()) }
+function getSolarTermNameForDate(date) {
+  try {
+    return (getSolarTerm(date) || '').trim()
+  } catch {
+    return ''
+  }
+}
+function getNextTermDate(date, currentTermName) {
+  for (let i = 1; i <= 25; i++) {
+    const candidate = makeLocalDate(date.getFullYear(), date.getMonth() + 1, date.getDate() + i)
+    const candidateTermName = getSolarTermNameForDate(candidate)
+    if (candidateTermName && candidateTermName !== currentTermName) return candidate
+  }
+  return makeLocalDate(date.getFullYear(), date.getMonth() + 1, date.getDate() + 15)
+}
+function validateTimeMachineDate() {
+  const y = Number(tmYear.value), m = Number(tmMonth.value), d = Number(tmDay.value)
+  if (!Number.isInteger(y) || y <= 0) { timeMachineError.value = '年份不合理'; return null }
+  if (!Number.isInteger(m) || m < 1 || m > 12) { timeMachineError.value = '月份不合理'; return null }
+  const maxDays = SolarUtil.getDaysOfMonth(y, m)
+  if (!Number.isInteger(d) || d < 1 || d > maxDays) { timeMachineError.value = `日期不合理`; return null }
+  return { y, m, d, date: makeLocalDate(y, m, d) }
+}
 
 const isSandboxActive = computed(() => !!parseYmdString(mockDateString.value))
 const effectiveDate = computed(() => {
@@ -1092,7 +1187,13 @@ function captureCurrentState() {
     foodStock: foodStock.value,
     waterStock: waterStock.value,
     highestRewardedThreshold: highestRewardedThreshold.value,
-    plantWaterByTerm: { ...plantWaterByTerm.value }
+    plantWaterByTerm: { ...plantWaterByTerm.value },
+    harvestRecords: { ...harvestRecords.value },
+    reportRecords: { ...reportRecords.value },
+    hasNewHarvest: hasNewHarvest.value,
+    hasNewReport: hasNewReport.value,
+    latestHarvestTermKey: latestHarvestTermKey.value,
+    latestReportTermKey: latestReportTermKey.value
   }
 }
 
@@ -1107,6 +1208,16 @@ function restoreSnapshot(snapshot) {
   foodStock.value = snapshot.foodStock
   waterStock.value = snapshot.waterStock
   plantWaterByTerm.value = { ...snapshot.plantWaterByTerm }
+  harvestRecords.value = { ...(snapshot.harvestRecords || {}) }
+  reportRecords.value = { ...(snapshot.reportRecords || {}) }
+  hasNewHarvest.value = !!snapshot.hasNewHarvest
+  hasNewReport.value = !!snapshot.hasNewReport
+  latestHarvestTermKey.value = snapshot.latestHarvestTermKey || ''
+  latestReportTermKey.value = snapshot.latestReportTermKey || ''
+  selectedHarvestTermKey.value = ''
+  selectedReportTermKey.value = ''
+  isGalleryOpen.value = false
+  isReportOpen.value = false
   suppressResourceRewards.value = true
   codeLines.value = snapshot.codeLines
   highestRewardedThreshold.value = snapshot.highestRewardedThreshold
@@ -1130,16 +1241,13 @@ function closeTimeMachine() {
 }
 
 function applyTimeMachine() {
-  const y = Number(tmYear.value), m = Number(tmMonth.value), d = Number(tmDay.value)
-  if (!Number.isInteger(y) || y <= 0) { timeMachineError.value = '年份不合理'; return }
-  if (!Number.isInteger(m) || m < 1 || m > 12) { timeMachineError.value = '月份不合理'; return }
-  const maxDays = SolarUtil.getDaysOfMonth(y, m)
-  if (!Number.isInteger(d) || d < 1 || d > maxDays) { timeMachineError.value = `日期不合理`; return }
+  const parsed = validateTimeMachineDate()
+  if (!parsed) return
 
   if (!sandboxSnapshot.value) sandboxSnapshot.value = captureCurrentState()
   
-  const sandboxDate = makeLocalDate(y, m, d)
-  mockDateString.value = `${y}-${pad2(m)}-${pad2(d)}`
+  const sandboxDate = parsed.date
+  mockDateString.value = `${parsed.y}-${pad2(parsed.m)}-${pad2(parsed.d)}`
   
   const termKey = getTermPinyinForDate(sandboxDate)
   suppressResourceRewards.value = true
@@ -1153,11 +1261,89 @@ function applyTimeMachine() {
   waterCount.value = 0
   todayPassed.value = 0
   todayErrors.value = 0
-  plantWaterByTerm.value = { [termKey]: 0 }
-
+  plantWaterByTerm.value = { [termKey]: Number(tmSettlementWaterings.value) || 0 }
   isTimeMachineOpen.value = false
   timeMachineError.value = ''
   message.value = `⏳ 沙盘生效！前往 ${mockDateString.value}`
+  resetCatState(3000)
+}
+
+function buildHarvestRecord(termName, termKey, stage) {
+  const tier = getHarvestTierByStage(stage)
+  return {
+    termName,
+    termKey,
+    stage,
+    tier,
+    itemName: harvestCopy[tier].itemName,
+    image: harvestImages[tier],
+    message: harvestCopy[tier].message
+  }
+}
+
+function saveHarvestRecord(record) {
+  const existing = harvestRecords.value[record.termKey]
+  if (existing && harvestTierRank[existing.tier] > harvestTierRank[record.tier]) return existing
+
+  harvestRecords.value = {
+    ...harvestRecords.value,
+    [record.termKey]: record
+  }
+  return record
+}
+
+function saveReportRecord(record) {
+  reportRecords.value = {
+    ...reportRecords.value,
+    [record.termKey]: record
+  }
+  return record
+}
+
+function simulateTermSettlement() {
+  const parsed = validateTimeMachineDate()
+  if (!parsed) return
+  if (!sandboxSnapshot.value) sandboxSnapshot.value = captureCurrentState()
+
+  const settledDate = parsed.date
+  const settledTermName = getSolarTermNameForDate(settledDate) || '当前节气'
+  const settledTermKey = solarTermMap[settledTermName] || getTermPinyinForDate(settledDate)
+  const waterings = Number(tmSettlementWaterings.value) || 0
+  const stage = getPlantStageByWaterings(waterings)
+  const totalActions = feedCount.value + waterings
+  const record = saveHarvestRecord(buildHarvestRecord(settledTermName, settledTermKey, stage))
+  const nextTermDate = getNextTermDate(settledDate, settledTermName)
+  const nextTermKey = getTermPinyinForDate(nextTermDate)
+
+  latestHarvestTermKey.value = settledTermKey
+  latestReportTermKey.value = settledTermKey
+  hasNewHarvest.value = true
+  hasNewReport.value = true
+  const reportRecord = {
+    termName: settledTermName,
+    termKey: settledTermKey,
+    title: `${settledTermName}结算周报`,
+    date: `${settledDate.getFullYear()}年${pad2(settledDate.getMonth() + 1)}月${pad2(settledDate.getDate())}日`,
+    owner: loggedInUser.value || '本地用户',
+    totalCodeLines: codeLines.value,
+    todayPassed: todayPassed.value,
+    todayErrors: todayErrors.value,
+    passRate: todayPassed.value + todayErrors.value === 0
+      ? '暂无检测记录'
+      : `${Math.round((todayPassed.value / (todayPassed.value + todayErrors.value)) * 100)}%`,
+    totalActions,
+    plantStage: stage,
+    syncText: '沙盘模拟结算，不会同步云端',
+    summary: `${settledTermName}已结算，植物成长到第 ${stage} 阶段，图鉴收获：${record.itemName}。`
+  }
+  saveReportRecord(reportRecord)
+
+  mockDateString.value = `${nextTermDate.getFullYear()}-${pad2(nextTermDate.getMonth() + 1)}-${pad2(nextTermDate.getDate())}`
+  plantWaterByTerm.value = { [nextTermKey]: 0 }
+  waterCount.value = 0
+  isTimeMachineOpen.value = false
+  isReportOpen.value = false
+  message.value = `✨ ${settledTermName}结算完成，图鉴和节气报告都有新内容！`
   resetCatState(3000)
 }
 
@@ -1345,39 +1531,104 @@ onBeforeUnmount(() => {
       <div v-show="!isFloatingMode" class="action-panel" style="-webkit-app-region: no-drag;">
         <button class="image-btn" @click="feedCat" aria-label="喂猫粮"><img src="./assets/btn-feed.png" draggable="false"></button>
         <button class="image-btn" @click="waterPlant" aria-label="浇水"><img src="./assets/btn-water.png" draggable="false"></button>
-        <button class="image-btn" @click="openGallery" aria-label="图鉴合集"><img src="./assets/btn-gallery.png" draggable="false"></button>
+        <button class="image-btn image-btn-gallery" :class="{ glowing: hasNewHarvest }" @click="openGallery" aria-label="图鉴合集"><img src="./assets/btn-gallery.png" draggable="false"></button>
         <button class="image-btn image-btn-settings" @click="openSettings" aria-label="设置"><img src="./assets/btn-settings.png" draggable="false"></button>
-        <button class="image-btn image-btn-weekly-report" @click="openWeeklyReport" aria-label="节气周报"><img src="./assets/btn-weekly-report.png" draggable="false"></button>
+        <button class="image-btn image-btn-weekly-report" :class="{ glowing: hasNewReport }" @click="openWeeklyReport" aria-label="节气周报"><img src="./assets/btn-weekly-report.png" draggable="false"></button>
         <button class="image-btn" @click="openTimeMachine" aria-label="沙盘模式"><img src="./assets/btn_shapanmode.png" draggable="false"></button>
       </div>
 
       <div
+        v-if="isGalleryOpen && !isFloatingMode"
+        class="gallery-mask"
+        style="-webkit-app-region: no-drag;"
+        @click.self="closeGallery"
+      >
+        <section class="gallery-panel">
+          <div class="gallery-header">
+            <h2>节气图鉴</h2>
+            <button class="gallery-close" @click="closeGallery">×</button>
+          </div>
+          <div class="gallery-grid">
+            <button
+              v-for="cell in galleryCells"
+              :key="cell.key"
+              class="gallery-cell"
+              :class="{ harvested: cell.record, sparkling: cell.isLatest && cell.record }"
+              @click="openHarvestDetail(cell.key)"
+            >
+              <span class="gallery-term">{{ cell.name }}</span>
+              <img v-if="cell.record" class="gallery-harvest-img" :src="cell.record.image" draggable="false" />
+            </button>
+          </div>
+
+          <div
+            v-if="selectedHarvestRecord"
+            class="harvest-detail-mask"
+            @click.self="closeHarvestDetail"
+          >
+            <section class="harvest-detail-paper">
+              <button class="harvest-detail-close" @click="closeHarvestDetail">×</button>
+              <img class="harvest-detail-img" :src="selectedHarvestRecord.image" draggable="false" />
+              <p class="harvest-detail-term">{{ selectedHarvestRecord.termName }} · 第 {{ selectedHarvestRecord.stage }} 阶段</p>
+              <p class="harvest-detail-copy">{{ selectedHarvestRecord.message }}</p>
+            </section>
+          </div>
+        </section>
+      </div>
+
+      <div
         v-if="isReportOpen && !isFloatingMode"
-        class="report-mask"
+        class="term-report-mask"
         style="-webkit-app-region: no-drag;"
         @click.self="closeWeeklyReport"
       >
-        <section class="report-panel">
-          <div class="report-header">
-            <div>
-              <p class="report-date">{{ weeklyReport.date }}</p>
-              <h2>{{ weeklyReport.title }}</h2>
-            </div>
-            <button class="report-close" @click="closeWeeklyReport">×</button>
+        <section class="term-report-panel">
+          <div class="term-report-header">
+            <h2>节气报告</h2>
+            <button class="term-report-close" @click="closeWeeklyReport">×</button>
+          </div>
+          <div class="term-report-grid">
+            <button
+              v-for="cell in reportCells"
+              :key="cell.key"
+              class="term-report-cell"
+              :class="{ recorded: cell.record, sparkling: cell.isLatest && cell.record }"
+              @click="openReportDetail(cell.key)"
+            >
+              <span class="term-report-name">{{ cell.name }}</span>
+              <span v-if="cell.record" class="paper-scroll" aria-hidden="true">
+                <span class="paper-scroll-body"></span>
+              </span>
+            </button>
           </div>
 
-          <p class="report-summary">{{ weeklyReport.summary }}</p>
+          <div
+            v-if="selectedReportRecord"
+            class="term-report-detail-mask"
+            @click.self="closeReportDetail"
+          >
+            <section class="term-report-paper">
+              <button class="term-report-detail-close" @click="closeReportDetail">×</button>
+              <p class="term-report-paper-date">{{ selectedReportRecord.date }}</p>
+              <h2>{{ selectedReportRecord.title }}</h2>
+              <p class="term-report-paper-summary">{{ selectedReportRecord.summary }}</p>
 
-          <div class="report-grid">
-            <div class="report-item"><span>累计代码</span><strong>{{ weeklyReport.totalCodeLines }}</strong></div>
-            <div class="report-item"><span>通过率</span><strong>{{ weeklyReport.passRate }}</strong></div>
-            <div class="report-item"><span>今日通过</span><strong>{{ weeklyReport.todayPassed }}</strong></div>
-            <div class="report-item"><span>今日报错</span><strong>{{ weeklyReport.todayErrors }}</strong></div>
-            <div class="report-item"><span>照料次数</span><strong>{{ weeklyReport.totalActions }}</strong></div>
-            <div class="report-item"><span>植物阶段</span><strong>{{ weeklyReport.plantStage }}</strong></div>
+              <div class="term-report-chart-placeholder">
+                <span>节气图</span>
+              </div>
+
+              <div class="term-report-data-grid">
+                <div class="term-report-data-item"><span>累计代码</span><strong>{{ selectedReportRecord.totalCodeLines }}</strong></div>
+                <div class="term-report-data-item"><span>通过率</span><strong>{{ selectedReportRecord.passRate }}</strong></div>
+                <div class="term-report-data-item"><span>今日通过</span><strong>{{ selectedReportRecord.todayPassed }}</strong></div>
+                <div class="term-report-data-item"><span>今日报错</span><strong>{{ selectedReportRecord.todayErrors }}</strong></div>
+                <div class="term-report-data-item"><span>照料次数</span><strong>{{ selectedReportRecord.totalActions }}</strong></div>
+                <div class="term-report-data-item"><span>植物阶段</span><strong>{{ selectedReportRecord.plantStage }}</strong></div>
+              </div>
+
+              <div class="term-report-paper-footer"><span>{{ selectedReportRecord.owner }}</span><span>{{ selectedReportRecord.syncText }}</span></div>
+            </section>
           </div>
-
-          <div class="report-footer"><span>{{ weeklyReport.owner }}</span><span>{{ weeklyReport.syncText }}</span></div>
         </section>
       </div>
 
@@ -1397,9 +1648,19 @@ onBeforeUnmount(() => {
             <input v-model.trim="tmDay" class="time-machine-input" inputmode="numeric" maxlength="2" placeholder="DD" @input="timeMachineError = ''" />
             <span class="time-machine-unit">日</span>
           </div>
+          <div class="settlement-stage-row">
+            <span>结算档位</span>
+            <select v-model.number="tmSettlementWaterings" class="settlement-stage-select" @change="timeMachineError = ''">
+              <option :value="0">stage1 · 0 次浇水</option>
+              <option :value="30">stage2 · 30 次浇水</option>
+              <option :value="60">stage3 · 60 次浇水</option>
+              <option :value="120">stage4 · 120 次浇水</option>
+            </select>
+          </div>
           <div v-if="timeMachineError" class="time-machine-error">{{ timeMachineError }}</div>
           <div class="time-machine-actions">
             <button class="time-machine-btn" @click="applyTimeMachine">确认应用</button>
+            <button class="time-machine-btn primary" @click="simulateTermSettlement">模拟结算</button>
             <button class="time-machine-btn" @click="closeTimeMachine">取消</button>
             <button v-if="isSandboxActive" class="time-machine-btn danger" @click="exitTimeMachine">退出沙盘</button>
           </div>
@@ -1771,6 +2032,458 @@ onBeforeUnmount(() => {
   transform: translateY(2px);
 }
 
+.image-btn-gallery.glowing {
+  animation: galleryButtonGlow 1.25s ease-in-out infinite;
+  filter: drop-shadow(0 0 10px rgba(255, 210, 74, 0.95));
+}
+
+.image-btn-weekly-report.glowing {
+  animation: galleryButtonGlow 1.25s ease-in-out infinite;
+  filter: drop-shadow(0 0 10px rgba(255, 210, 74, 0.95));
+}
+
+.gallery-mask {
+  position: absolute;
+  inset: 0;
+  z-index: 13;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(39, 27, 14, 0.36);
+  pointer-events: auto;
+}
+
+.gallery-panel {
+  position: relative;
+  width: 760px;
+  padding: 18px;
+  border: 2px solid #7b4f2e;
+  border-radius: 8px;
+  background:
+    linear-gradient(90deg, rgba(255,255,255,0.08), rgba(0,0,0,0.08)),
+    repeating-linear-gradient(0deg, #9c6a3d 0, #9c6a3d 18px, #8a5832 19px, #a87645 36px);
+  color: #f8e9c6;
+  box-shadow: 0 20px 46px rgba(38, 25, 12, 0.36);
+}
+
+.gallery-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.gallery-header h2 {
+  margin: 0;
+  font-size: 24px;
+  text-shadow: 0 2px 0 rgba(68, 39, 20, 0.55);
+}
+
+.gallery-close,
+.harvest-detail-close {
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 50%;
+  color: #fff3cf;
+  background: rgba(78, 43, 20, 0.45);
+  cursor: pointer;
+  font-size: 22px;
+  line-height: 1;
+}
+
+.gallery-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  grid-template-rows: repeat(4, 104px);
+  gap: 10px;
+}
+
+.gallery-cell {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 4px;
+  min-width: 0;
+  padding: 8px 6px;
+  border: 2px solid rgba(76, 42, 20, 0.78);
+  border-radius: 6px;
+  background:
+    linear-gradient(135deg, rgba(255,255,255,0.12), rgba(0,0,0,0.08)),
+    #b17842;
+  box-shadow: inset 0 2px 0 rgba(255,255,255,0.16), inset 0 -4px 0 rgba(74, 41, 21, 0.18);
+  color: #fff1c8;
+  cursor: default;
+}
+
+.gallery-cell.harvested {
+  cursor: pointer;
+}
+
+.gallery-cell.harvested:hover {
+  filter: brightness(1.08);
+}
+
+.gallery-cell.sparkling {
+  animation: harvestCellGlow 1.2s ease-in-out infinite;
+}
+
+.gallery-term {
+  width: 100%;
+  overflow: hidden;
+  color: #fff4d3;
+  font-size: 15px;
+  line-height: 1.2;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-shadow: 0 1px 0 rgba(62, 32, 14, 0.7);
+}
+
+.gallery-harvest-img {
+  width: 66px;
+  height: 66px;
+  object-fit: contain;
+  filter: drop-shadow(0 4px 4px rgba(63, 33, 12, 0.32));
+}
+
+.harvest-detail-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 15;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(31, 20, 10, 0.32);
+}
+
+.harvest-detail-paper {
+  position: relative;
+  width: 420px;
+  min-height: 470px;
+  padding: 30px 34px;
+  border-radius: 8px;
+  border: 1px solid rgba(116, 74, 35, 0.45);
+  background:
+    radial-gradient(circle at 18% 12%, rgba(255,255,255,0.28), transparent 24%),
+    linear-gradient(135deg, #ead19b, #d7ad6a 48%, #ebd19c);
+  color: #5d3920;
+  text-align: center;
+  box-shadow: 0 18px 44px rgba(36, 22, 10, 0.34);
+}
+
+.harvest-detail-paper::before {
+  content: "";
+  position: absolute;
+  inset: 10px;
+  border: 1px dashed rgba(105, 66, 32, 0.38);
+  border-radius: 6px;
+  pointer-events: none;
+}
+
+.harvest-detail-close {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  color: #6b3c1e;
+  background: rgba(107, 60, 30, 0.12);
+}
+
+.harvest-detail-img {
+  position: relative;
+  z-index: 1;
+  width: 240px;
+  height: 240px;
+  object-fit: contain;
+  margin-top: 18px;
+  filter: drop-shadow(0 8px 8px rgba(89, 51, 22, 0.24));
+}
+
+.harvest-detail-term,
+.harvest-detail-copy {
+  position: relative;
+  z-index: 1;
+}
+
+.harvest-detail-term {
+  margin: 10px 0 8px;
+  color: #7c4d26;
+  font-size: 15px;
+}
+
+.harvest-detail-copy {
+  margin: 0;
+  color: #57371e;
+  font-size: 20px;
+  line-height: 1.55;
+}
+
+.term-report-mask {
+  position: absolute;
+  inset: 0;
+  z-index: 13;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(39, 27, 14, 0.36);
+  pointer-events: auto;
+}
+
+.term-report-panel {
+  position: relative;
+  width: 760px;
+  padding: 18px;
+  border: 2px solid #7b4f2e;
+  border-radius: 8px;
+  background:
+    linear-gradient(90deg, rgba(255,255,255,0.08), rgba(0,0,0,0.08)),
+    repeating-linear-gradient(0deg, #9c6a3d 0, #9c6a3d 18px, #8a5832 19px, #a87645 36px);
+  color: #f8e9c6;
+  box-shadow: 0 20px 46px rgba(38, 25, 12, 0.36);
+}
+
+.term-report-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.term-report-header h2 {
+  margin: 0;
+  font-size: 24px;
+  text-shadow: 0 2px 0 rgba(68, 39, 20, 0.55);
+}
+
+.term-report-close,
+.term-report-detail-close {
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 50%;
+  color: #fff3cf;
+  background: rgba(78, 43, 20, 0.45);
+  cursor: pointer;
+  font-size: 22px;
+  line-height: 1;
+}
+
+.term-report-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  grid-template-rows: repeat(4, 104px);
+  gap: 10px;
+}
+
+.term-report-cell {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
+  min-width: 0;
+  padding: 8px 6px;
+  border: 2px solid rgba(76, 42, 20, 0.78);
+  border-radius: 6px;
+  background:
+    linear-gradient(135deg, rgba(255,255,255,0.12), rgba(0,0,0,0.08)),
+    #b17842;
+  box-shadow: inset 0 2px 0 rgba(255,255,255,0.16), inset 0 -4px 0 rgba(74, 41, 21, 0.18);
+  color: #fff1c8;
+  cursor: default;
+}
+
+.term-report-cell.recorded {
+  cursor: pointer;
+}
+
+.term-report-cell.recorded:hover {
+  filter: brightness(1.08);
+}
+
+.term-report-cell.sparkling {
+  animation: harvestCellGlow 1.2s ease-in-out infinite;
+}
+
+.term-report-name {
+  width: 100%;
+  overflow: hidden;
+  color: #fff4d3;
+  font-size: 15px;
+  line-height: 1.2;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-shadow: 0 1px 0 rgba(62, 32, 14, 0.7);
+}
+
+.paper-scroll {
+  position: relative;
+  display: block;
+  width: 68px;
+  height: 50px;
+  margin-top: 3px;
+  filter: drop-shadow(0 5px 5px rgba(63, 33, 12, 0.32));
+}
+
+.paper-scroll::before,
+.paper-scroll::after {
+  content: "";
+  position: absolute;
+  top: 9px;
+  width: 16px;
+  height: 32px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #8b5730, #c99554 48%, #7a4527);
+  box-shadow: inset 0 0 0 2px rgba(86, 48, 24, 0.28);
+}
+
+.paper-scroll::before {
+  left: 3px;
+}
+
+.paper-scroll::after {
+  right: 3px;
+}
+
+.paper-scroll-body {
+  position: absolute;
+  left: 13px;
+  top: 12px;
+  width: 42px;
+  height: 26px;
+  border-radius: 4px;
+  background:
+    repeating-linear-gradient(0deg, rgba(128, 86, 39, 0.16) 0, rgba(128, 86, 39, 0.16) 1px, transparent 1px, transparent 6px),
+    linear-gradient(135deg, #f0d79d, #dba964);
+  box-shadow: inset 0 0 0 1px rgba(104, 65, 29, 0.24);
+}
+
+.term-report-detail-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 15;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(31, 20, 10, 0.32);
+}
+
+.term-report-paper {
+  position: relative;
+  width: 560px;
+  min-height: 560px;
+  padding: 28px 34px;
+  border-radius: 8px;
+  border: 1px solid rgba(116, 74, 35, 0.45);
+  background:
+    radial-gradient(circle at 18% 12%, rgba(255,255,255,0.28), transparent 24%),
+    linear-gradient(135deg, #ead19b, #d7ad6a 48%, #ebd19c);
+  color: #5d3920;
+  box-shadow: 0 18px 44px rgba(36, 22, 10, 0.34);
+}
+
+.term-report-paper::before {
+  content: "";
+  position: absolute;
+  inset: 10px;
+  border: 1px dashed rgba(105, 66, 32, 0.38);
+  border-radius: 6px;
+  pointer-events: none;
+}
+
+.term-report-detail-close {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  color: #6b3c1e;
+  background: rgba(107, 60, 30, 0.12);
+}
+
+.term-report-paper h2,
+.term-report-paper-date,
+.term-report-paper-summary,
+.term-report-chart-placeholder,
+.term-report-data-grid,
+.term-report-paper-footer {
+  position: relative;
+  z-index: 1;
+}
+
+.term-report-paper h2 {
+  margin: 2px 0 8px;
+  color: #5d3920;
+  font-size: 28px;
+  text-align: center;
+}
+
+.term-report-paper-date {
+  margin: 0;
+  color: #7c4d26;
+  font-size: 14px;
+  text-align: center;
+}
+
+.term-report-paper-summary {
+  margin: 10px 0 14px;
+  color: #57371e;
+  font-size: 15px;
+  line-height: 1.55;
+  text-align: center;
+}
+
+.term-report-chart-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 128px;
+  margin: 0 4px 16px;
+  border: 1px dashed rgba(100, 62, 28, 0.45);
+  border-radius: 6px;
+  background: rgba(255, 239, 192, 0.28);
+  color: rgba(88, 55, 25, 0.52);
+  font-size: 18px;
+}
+
+.term-report-data-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+
+.term-report-data-item {
+  min-height: 72px;
+  padding: 10px;
+  border: 1px solid rgba(107, 68, 31, 0.24);
+  border-radius: 6px;
+  background: rgba(255, 237, 191, 0.34);
+}
+
+.term-report-data-item span {
+  display: block;
+  color: #7a542c;
+  font-size: 12px;
+}
+
+.term-report-data-item strong {
+  display: block;
+  margin-top: 8px;
+  color: #57371e;
+  font-size: 22px;
+}
+
+.term-report-paper-footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 14px;
+  color: #7a542c;
+  font-size: 12px;
+}
+
 .report-mask { position: absolute; inset: 0; z-index: 12; display: flex; align-items: center; justify-content: center; background: rgba(40, 32, 18, 0.28); pointer-events: auto; }
 .report-panel { width: 560px; padding: 22px; border: 1px solid rgba(84, 78, 62, 0.4); border-radius: 8px; background: rgba(253, 250, 240, 0.96); color: #4e4230; box-shadow: 0 18px 42px rgba(44, 36, 20, 0.22); }
 .report-header { display: flex; justify-content: space-between; gap: 16px; }
@@ -1829,7 +2542,29 @@ onBeforeUnmount(() => {
   outline: none;
 }
 
+.settlement-stage-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin-bottom: 14px;
+  color: #5a4730;
+  font-size: 14px;
+}
+
+.settlement-stage-select {
+  width: 210px;
+  height: 36px;
+  border-radius: 8px;
+  border: 1px solid rgba(84, 78, 62, 0.45);
+  padding: 0 10px;
+  background: rgba(252, 248, 236, 0.98);
+  color: #5a4730;
+  outline: none;
+}
+
 .time-machine-actions {
+  flex-wrap: wrap;
   display: flex;
   justify-content: center;
   gap: 10px;
@@ -1862,6 +2597,12 @@ onBeforeUnmount(() => {
   transform: translateY(1px);
 }
 
+.time-machine-btn.primary {
+  background: rgba(79, 143, 95, 0.92);
+  color: #fff;
+  border-color: rgba(47, 93, 58, 0.72);
+}
+
 .time-machine-btn.danger {
   background: rgba(238, 87, 87, 0.9);
   color: #fff;
@@ -1885,6 +2626,32 @@ onBeforeUnmount(() => {
   box-shadow: 0 5px 5px rgba(0,0,0,0.4);
   z-index: 2;
   animation: ballRollBounce 1.5s linear infinite;
+}
+
+@keyframes galleryButtonGlow {
+  0%, 100% {
+    filter: drop-shadow(0 0 8px rgba(255, 211, 76, 0.85));
+    transform: scale(1);
+  }
+  50% {
+    filter: drop-shadow(0 0 18px rgba(255, 236, 135, 1));
+    transform: scale(1.04);
+  }
+}
+
+@keyframes harvestCellGlow {
+  0%, 100% {
+    box-shadow:
+      inset 0 2px 0 rgba(255,255,255,0.16),
+      inset 0 -4px 0 rgba(74, 41, 21, 0.18),
+      0 0 8px rgba(255, 213, 82, 0.72);
+  }
+  50% {
+    box-shadow:
+      inset 0 2px 0 rgba(255,255,255,0.2),
+      inset 0 -4px 0 rgba(74, 41, 21, 0.18),
+      0 0 20px rgba(255, 237, 148, 1);
+  }
 }
 
 @keyframes ballRollBounce {
