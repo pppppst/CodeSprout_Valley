@@ -710,9 +710,9 @@ const plantImageConfig = {
   xiaoman: { // 小满
     default: {
       width: '100px',
-      left: '450px',
-      bottom: '160px',
-      transform: 'scale(4)',
+      left: '440px',
+      bottom: '120px',
+      transform: 'scale(2.5)',
       transformOrigin: 'bottom center'
     },
     stage1: {},
@@ -738,7 +738,7 @@ const plantImageConfig = {
       width: '100px',
       left: '450px',
       bottom: '160px',
-      transform: 'scale(5.5)',
+      transform: 'scale(4.5)',
       transformOrigin: 'bottom center'
     },
     stage1: {},
@@ -751,10 +751,11 @@ const plantImageConfig = {
       width: '100px',
       left: '450px',
       bottom: '160px',
-      transform: 'scale(4)',
+      transform: 'scale(5)',
       transformOrigin: 'bottom center'
     },
-    stage1: {},
+    stage1: { transform: 'scale(3)'
+    },
     stage2: {},
     stage3: {},
     stage4: {}
@@ -764,10 +765,10 @@ const plantImageConfig = {
       width: '100px',
       left: '450px',
       bottom: '160px',
-      transform: 'scale(4)',
+      transform: 'scale(2.5)',
       transformOrigin: 'bottom center'
     },
-    stage1: {},
+    stage1: {bottom: '140px'},
     stage2: {},
     stage3: {},
     stage4: {}
