@@ -807,9 +807,9 @@ const plantImageConfig = {
   // 冬季节气
   lidong: { // 立冬
     default: {
-      width: '100px',
+      width: '50px',
       left: '450px',
-      bottom: '160px',
+      bottom: '120px',
       transform: 'scale(4)',
       transformOrigin: 'bottom center'
     },
@@ -820,9 +820,9 @@ const plantImageConfig = {
   },
   xiaoxue: { // 小雪
     default: {
-      width: '100px',
+      width: '50px',
       left: '450px',
-      bottom: '160px',
+      bottom: '130px',
       transform: 'scale(4)',
       transformOrigin: 'bottom center'
     },
@@ -833,9 +833,9 @@ const plantImageConfig = {
   },
   daxue: { // 大雪
     default: {
-      width: '100px',
+      width: '60px',
       left: '450px',
-      bottom: '160px',
+      bottom: '110px',
       transform: 'scale(4)',
       transformOrigin: 'bottom center'
     },
@@ -846,7 +846,7 @@ const plantImageConfig = {
   },
   dongzhi: { // 冬至
     default: {
-      width: '100px',
+      width: '80px',
       left: '450px',
       bottom: '160px',
       transform: 'scale(4)',
@@ -859,9 +859,9 @@ const plantImageConfig = {
   },
   xiaohan: { // 小寒
     default: {
-      width: '100px',
+      width: '60px',
       left: '450px',
-      bottom: '160px',
+      bottom: '130px',
       transform: 'scale(4)',
       transformOrigin: 'bottom center'
     },
@@ -872,9 +872,9 @@ const plantImageConfig = {
   },
   dahan: { // 大寒
     default: {
-      width: '100px',
-      left: '450px',
-      bottom: '160px',
+      width: '60px',
+      left: '455px',
+      bottom: '140px',
       transform: 'scale(4)',
       transformOrigin: 'bottom center'
     },
