@@ -775,7 +775,9 @@ const plantImageConfig = {
       transform: 'scale(5)',
       transformOrigin: 'bottom center'
     },
-    stage1: { transform: 'scale(3)'
+    stage1: { 
+      transform: 'scale(2.5)',
+      bottom: '160px'
     },
     stage2: {},
     stage3: {},

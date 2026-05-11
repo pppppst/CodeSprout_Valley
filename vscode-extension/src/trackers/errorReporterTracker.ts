@@ -109,4 +109,4 @@ export function activateErrorReporterTracker(context: vscode.ExtensionContext): 
 
 export function deactivateErrorReporterTracker(): void {
     flushDiagnosticReport();
-}
+}``
