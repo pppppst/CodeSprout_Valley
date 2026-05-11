@@ -20,9 +20,11 @@ const lastSyncTime = ref(localStorage.getItem('codeSproutLastSyncTime') || '')
 const isReportOpen = ref(false)
 const isGalleryOpen = ref(false)
 const hasNewHarvest = ref(false)
+const hasNewReport = ref(false)
 const selectedHarvestTermKey = ref('')
+const selectedReportTermKey = ref('')
 const latestHarvestTermKey = ref('')
-const settlementReport = ref(null)
+const latestReportTermKey = ref('')
 
 function setAuthSession(token, username) {
   cloudToken.value = token
@@ -395,13 +397,21 @@ function openSettings() {
   resetCatState(2000)
 }
 function openWeeklyReport() {
-  settlementReport.value = null
   isReportOpen.value = true
+  hasNewReport.value = false
   message.value = '🗞️ 正在打开节气周报...'
   resetCatState(2000)
 }
 function closeWeeklyReport() {
   isReportOpen.value = false
+  selectedReportTermKey.value = ''
+}
+function openReportDetail(termKey) {
+  if (!reportRecords.value[termKey]) return
+  selectedReportTermKey.value = termKey
+}
+function closeReportDetail() {
+  selectedReportTermKey.value = ''
 }
 function toggleStats() {
   isStatsVisible.value = !isStatsVisible.value
@@ -494,6 +504,7 @@ const harvestCopy = {
   }
 }
 const harvestRecords = ref({})
+const reportRecords = ref({})
 
 const currentTermPinyin = computed(() => {
   const termName = (currentSolarTerm.value || '').trim()
@@ -527,35 +538,14 @@ const currentPlantStage = computed(() => {
   return getPlantStageByWaterings(waterings)
 })
 
-const weeklyReport = computed(() => {
-  const totalActions = feedCount.value + waterCount.value
-  const totalChecks = todayPassed.value + todayErrors.value
-  const passRate = totalChecks === 0
-    ? '暂无检测记录'
-    : `${Math.round((todayPassed.value / totalChecks) * 100)}%`
-
-  return {
-    title: `${currentSolarTerm.value || '当前节气'}成长报告`,
-    date: currentDate.value,
-    owner: loggedInUser.value || '本地用户',
-    totalCodeLines: codeLines.value,
-    todayPassed: todayPassed.value,
-    todayErrors: todayErrors.value,
-    passRate,
-    totalActions,
-    plantStage: currentPlantStage.value,
-    syncText: lastSyncTime.value ? `最近同步：${lastSyncTime.value}` : '尚未完成云端同步',
-    summary: totalActions > 0
-      ? `本节气已照料 ${totalActions} 次，植物成长到第 ${currentPlantStage.value} 阶段。`
-      : `本节气植物处于第 ${currentPlantStage.value} 阶段，继续写代码和照料即可推进成长。`
-  }
-})
-
-const displayedWeeklyReport = computed(() => settlementReport.value || weeklyReport.value)
-
 const selectedHarvestRecord = computed(() => {
   if (!selectedHarvestTermKey.value) return null
   return harvestRecords.value[selectedHarvestTermKey.value] || null
+})
+
+const selectedReportRecord = computed(() => {
+  if (!selectedReportTermKey.value) return null
+  return reportRecords.value[selectedReportTermKey.value] || null
 })
 
 const galleryCells = computed(() => {
@@ -563,6 +553,14 @@ const galleryCells = computed(() => {
     ...term,
     record: harvestRecords.value[term.key] || null,
     isLatest: latestHarvestTermKey.value === term.key
+  }))
+})
+
+const reportCells = computed(() => {
+  return solarTermEntries.map((term) => ({
+    ...term,
+    record: reportRecords.value[term.key] || null,
+    isLatest: latestReportTermKey.value === term.key
   }))
 })
 
@@ -1191,8 +1189,11 @@ function captureCurrentState() {
     highestRewardedThreshold: highestRewardedThreshold.value,
     plantWaterByTerm: { ...plantWaterByTerm.value },
     harvestRecords: { ...harvestRecords.value },
+    reportRecords: { ...reportRecords.value },
     hasNewHarvest: hasNewHarvest.value,
-    latestHarvestTermKey: latestHarvestTermKey.value
+    hasNewReport: hasNewReport.value,
+    latestHarvestTermKey: latestHarvestTermKey.value,
+    latestReportTermKey: latestReportTermKey.value
   }
 }
 
@@ -1207,12 +1208,16 @@ function restoreSnapshot(snapshot) {
   foodStock.value = snapshot.foodStock
   waterStock.value = snapshot.waterStock
   plantWaterByTerm.value = { ...snapshot.plantWaterByTerm }
-  harvestRecords.value = { ...snapshot.harvestRecords }
-  hasNewHarvest.value = snapshot.hasNewHarvest
-  latestHarvestTermKey.value = snapshot.latestHarvestTermKey
-  settlementReport.value = null
+  harvestRecords.value = { ...(snapshot.harvestRecords || {}) }
+  reportRecords.value = { ...(snapshot.reportRecords || {}) }
+  hasNewHarvest.value = !!snapshot.hasNewHarvest
+  hasNewReport.value = !!snapshot.hasNewReport
+  latestHarvestTermKey.value = snapshot.latestHarvestTermKey || ''
+  latestReportTermKey.value = snapshot.latestReportTermKey || ''
   selectedHarvestTermKey.value = ''
+  selectedReportTermKey.value = ''
   isGalleryOpen.value = false
+  isReportOpen.value = false
   suppressResourceRewards.value = true
   codeLines.value = snapshot.codeLines
   highestRewardedThreshold.value = snapshot.highestRewardedThreshold
@@ -1257,8 +1262,6 @@ function applyTimeMachine() {
   todayPassed.value = 0
   todayErrors.value = 0
   plantWaterByTerm.value = { [termKey]: Number(tmSettlementWaterings.value) || 0 }
-  settlementReport.value = null
-
   isTimeMachineOpen.value = false
   timeMachineError.value = ''
   message.value = `⏳ 沙盘生效！前往 ${mockDateString.value}`
@@ -1289,6 +1292,14 @@ function saveHarvestRecord(record) {
   return record
 }
 
+function saveReportRecord(record) {
+  reportRecords.value = {
+    ...reportRecords.value,
+    [record.termKey]: record
+  }
+  return record
+}
+
 function simulateTermSettlement() {
   const parsed = validateTimeMachineDate()
   if (!parsed) return
@@ -1305,8 +1316,12 @@ function simulateTermSettlement() {
   const nextTermKey = getTermPinyinForDate(nextTermDate)
 
   latestHarvestTermKey.value = settledTermKey
+  latestReportTermKey.value = settledTermKey
   hasNewHarvest.value = true
-  settlementReport.value = {
+  hasNewReport.value = true
+  const reportRecord = {
+    termName: settledTermName,
+    termKey: settledTermKey,
     title: `${settledTermName}结算周报`,
     date: `${settledDate.getFullYear()}年${pad2(settledDate.getMonth() + 1)}月${pad2(settledDate.getDate())}日`,
     owner: loggedInUser.value || '本地用户',
@@ -1321,13 +1336,14 @@ function simulateTermSettlement() {
     syncText: '沙盘模拟结算，不会同步云端',
     summary: `${settledTermName}已结算，植物成长到第 ${stage} 阶段，图鉴收获：${record.itemName}。`
   }
+  saveReportRecord(reportRecord)
 
   mockDateString.value = `${nextTermDate.getFullYear()}-${pad2(nextTermDate.getMonth() + 1)}-${pad2(nextTermDate.getDate())}`
   plantWaterByTerm.value = { [nextTermKey]: 0 }
   waterCount.value = 0
   isTimeMachineOpen.value = false
-  isReportOpen.value = true
-  message.value = `✨ ${settledTermName}结算完成，图鉴有新收获！`
+  isReportOpen.value = false
+  message.value = `✨ ${settledTermName}结算完成，图鉴和节气报告都有新内容！`
   resetCatState(3000)
 }
 
@@ -1517,7 +1533,7 @@ onBeforeUnmount(() => {
         <button class="image-btn" @click="waterPlant" aria-label="浇水"><img src="./assets/btn-water.png" draggable="false"></button>
         <button class="image-btn image-btn-gallery" :class="{ glowing: hasNewHarvest }" @click="openGallery" aria-label="图鉴合集"><img src="./assets/btn-gallery.png" draggable="false"></button>
         <button class="image-btn image-btn-settings" @click="openSettings" aria-label="设置"><img src="./assets/btn-settings.png" draggable="false"></button>
-        <button class="image-btn image-btn-weekly-report" @click="openWeeklyReport" aria-label="节气周报"><img src="./assets/btn-weekly-report.png" draggable="false"></button>
+        <button class="image-btn image-btn-weekly-report" :class="{ glowing: hasNewReport }" @click="openWeeklyReport" aria-label="节气周报"><img src="./assets/btn-weekly-report.png" draggable="false"></button>
         <button class="image-btn" @click="openTimeMachine" aria-label="沙盘模式"><img src="./assets/btn_shapanmode.png" draggable="false"></button>
       </div>
 
@@ -1562,31 +1578,57 @@ onBeforeUnmount(() => {
 
       <div
         v-if="isReportOpen && !isFloatingMode"
-        class="report-mask"
+        class="term-report-mask"
         style="-webkit-app-region: no-drag;"
         @click.self="closeWeeklyReport"
       >
-        <section class="report-panel">
-          <div class="report-header">
-            <div>
-              <p class="report-date">{{ displayedWeeklyReport.date }}</p>
-              <h2>{{ displayedWeeklyReport.title }}</h2>
-            </div>
-            <button class="report-close" @click="closeWeeklyReport">×</button>
+        <section class="term-report-panel">
+          <div class="term-report-header">
+            <h2>节气报告</h2>
+            <button class="term-report-close" @click="closeWeeklyReport">×</button>
+          </div>
+          <div class="term-report-grid">
+            <button
+              v-for="cell in reportCells"
+              :key="cell.key"
+              class="term-report-cell"
+              :class="{ recorded: cell.record, sparkling: cell.isLatest && cell.record }"
+              @click="openReportDetail(cell.key)"
+            >
+              <span class="term-report-name">{{ cell.name }}</span>
+              <span v-if="cell.record" class="paper-scroll" aria-hidden="true">
+                <span class="paper-scroll-body"></span>
+              </span>
+            </button>
           </div>
 
-          <p class="report-summary">{{ displayedWeeklyReport.summary }}</p>
+          <div
+            v-if="selectedReportRecord"
+            class="term-report-detail-mask"
+            @click.self="closeReportDetail"
+          >
+            <section class="term-report-paper">
+              <button class="term-report-detail-close" @click="closeReportDetail">×</button>
+              <p class="term-report-paper-date">{{ selectedReportRecord.date }}</p>
+              <h2>{{ selectedReportRecord.title }}</h2>
+              <p class="term-report-paper-summary">{{ selectedReportRecord.summary }}</p>
 
-          <div class="report-grid">
-            <div class="report-item"><span>累计代码</span><strong>{{ displayedWeeklyReport.totalCodeLines }}</strong></div>
-            <div class="report-item"><span>通过率</span><strong>{{ displayedWeeklyReport.passRate }}</strong></div>
-            <div class="report-item"><span>今日通过</span><strong>{{ displayedWeeklyReport.todayPassed }}</strong></div>
-            <div class="report-item"><span>今日报错</span><strong>{{ displayedWeeklyReport.todayErrors }}</strong></div>
-            <div class="report-item"><span>照料次数</span><strong>{{ displayedWeeklyReport.totalActions }}</strong></div>
-            <div class="report-item"><span>植物阶段</span><strong>{{ displayedWeeklyReport.plantStage }}</strong></div>
+              <div class="term-report-chart-placeholder">
+                <span>节气图</span>
+              </div>
+
+              <div class="term-report-data-grid">
+                <div class="term-report-data-item"><span>累计代码</span><strong>{{ selectedReportRecord.totalCodeLines }}</strong></div>
+                <div class="term-report-data-item"><span>通过率</span><strong>{{ selectedReportRecord.passRate }}</strong></div>
+                <div class="term-report-data-item"><span>今日通过</span><strong>{{ selectedReportRecord.todayPassed }}</strong></div>
+                <div class="term-report-data-item"><span>今日报错</span><strong>{{ selectedReportRecord.todayErrors }}</strong></div>
+                <div class="term-report-data-item"><span>照料次数</span><strong>{{ selectedReportRecord.totalActions }}</strong></div>
+                <div class="term-report-data-item"><span>植物阶段</span><strong>{{ selectedReportRecord.plantStage }}</strong></div>
+              </div>
+
+              <div class="term-report-paper-footer"><span>{{ selectedReportRecord.owner }}</span><span>{{ selectedReportRecord.syncText }}</span></div>
+            </section>
           </div>
-
-          <div class="report-footer"><span>{{ displayedWeeklyReport.owner }}</span><span>{{ displayedWeeklyReport.syncText }}</span></div>
         </section>
       </div>
 
@@ -1995,6 +2037,11 @@ onBeforeUnmount(() => {
   filter: drop-shadow(0 0 10px rgba(255, 210, 74, 0.95));
 }
 
+.image-btn-weekly-report.glowing {
+  animation: galleryButtonGlow 1.25s ease-in-out infinite;
+  filter: drop-shadow(0 0 10px rgba(255, 210, 74, 0.95));
+}
+
 .gallery-mask {
   position: absolute;
   inset: 0;
@@ -2171,6 +2218,270 @@ onBeforeUnmount(() => {
   color: #57371e;
   font-size: 20px;
   line-height: 1.55;
+}
+
+.term-report-mask {
+  position: absolute;
+  inset: 0;
+  z-index: 13;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(39, 27, 14, 0.36);
+  pointer-events: auto;
+}
+
+.term-report-panel {
+  position: relative;
+  width: 760px;
+  padding: 18px;
+  border: 2px solid #7b4f2e;
+  border-radius: 8px;
+  background:
+    linear-gradient(90deg, rgba(255,255,255,0.08), rgba(0,0,0,0.08)),
+    repeating-linear-gradient(0deg, #9c6a3d 0, #9c6a3d 18px, #8a5832 19px, #a87645 36px);
+  color: #f8e9c6;
+  box-shadow: 0 20px 46px rgba(38, 25, 12, 0.36);
+}
+
+.term-report-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.term-report-header h2 {
+  margin: 0;
+  font-size: 24px;
+  text-shadow: 0 2px 0 rgba(68, 39, 20, 0.55);
+}
+
+.term-report-close,
+.term-report-detail-close {
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 50%;
+  color: #fff3cf;
+  background: rgba(78, 43, 20, 0.45);
+  cursor: pointer;
+  font-size: 22px;
+  line-height: 1;
+}
+
+.term-report-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  grid-template-rows: repeat(4, 104px);
+  gap: 10px;
+}
+
+.term-report-cell {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
+  min-width: 0;
+  padding: 8px 6px;
+  border: 2px solid rgba(76, 42, 20, 0.78);
+  border-radius: 6px;
+  background:
+    linear-gradient(135deg, rgba(255,255,255,0.12), rgba(0,0,0,0.08)),
+    #b17842;
+  box-shadow: inset 0 2px 0 rgba(255,255,255,0.16), inset 0 -4px 0 rgba(74, 41, 21, 0.18);
+  color: #fff1c8;
+  cursor: default;
+}
+
+.term-report-cell.recorded {
+  cursor: pointer;
+}
+
+.term-report-cell.recorded:hover {
+  filter: brightness(1.08);
+}
+
+.term-report-cell.sparkling {
+  animation: harvestCellGlow 1.2s ease-in-out infinite;
+}
+
+.term-report-name {
+  width: 100%;
+  overflow: hidden;
+  color: #fff4d3;
+  font-size: 15px;
+  line-height: 1.2;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-shadow: 0 1px 0 rgba(62, 32, 14, 0.7);
+}
+
+.paper-scroll {
+  position: relative;
+  display: block;
+  width: 68px;
+  height: 50px;
+  margin-top: 3px;
+  filter: drop-shadow(0 5px 5px rgba(63, 33, 12, 0.32));
+}
+
+.paper-scroll::before,
+.paper-scroll::after {
+  content: "";
+  position: absolute;
+  top: 9px;
+  width: 16px;
+  height: 32px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #8b5730, #c99554 48%, #7a4527);
+  box-shadow: inset 0 0 0 2px rgba(86, 48, 24, 0.28);
+}
+
+.paper-scroll::before {
+  left: 3px;
+}
+
+.paper-scroll::after {
+  right: 3px;
+}
+
+.paper-scroll-body {
+  position: absolute;
+  left: 13px;
+  top: 12px;
+  width: 42px;
+  height: 26px;
+  border-radius: 4px;
+  background:
+    repeating-linear-gradient(0deg, rgba(128, 86, 39, 0.16) 0, rgba(128, 86, 39, 0.16) 1px, transparent 1px, transparent 6px),
+    linear-gradient(135deg, #f0d79d, #dba964);
+  box-shadow: inset 0 0 0 1px rgba(104, 65, 29, 0.24);
+}
+
+.term-report-detail-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 15;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(31, 20, 10, 0.32);
+}
+
+.term-report-paper {
+  position: relative;
+  width: 560px;
+  min-height: 560px;
+  padding: 28px 34px;
+  border-radius: 8px;
+  border: 1px solid rgba(116, 74, 35, 0.45);
+  background:
+    radial-gradient(circle at 18% 12%, rgba(255,255,255,0.28), transparent 24%),
+    linear-gradient(135deg, #ead19b, #d7ad6a 48%, #ebd19c);
+  color: #5d3920;
+  box-shadow: 0 18px 44px rgba(36, 22, 10, 0.34);
+}
+
+.term-report-paper::before {
+  content: "";
+  position: absolute;
+  inset: 10px;
+  border: 1px dashed rgba(105, 66, 32, 0.38);
+  border-radius: 6px;
+  pointer-events: none;
+}
+
+.term-report-detail-close {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  color: #6b3c1e;
+  background: rgba(107, 60, 30, 0.12);
+}
+
+.term-report-paper h2,
+.term-report-paper-date,
+.term-report-paper-summary,
+.term-report-chart-placeholder,
+.term-report-data-grid,
+.term-report-paper-footer {
+  position: relative;
+  z-index: 1;
+}
+
+.term-report-paper h2 {
+  margin: 2px 0 8px;
+  color: #5d3920;
+  font-size: 28px;
+  text-align: center;
+}
+
+.term-report-paper-date {
+  margin: 0;
+  color: #7c4d26;
+  font-size: 14px;
+  text-align: center;
+}
+
+.term-report-paper-summary {
+  margin: 10px 0 14px;
+  color: #57371e;
+  font-size: 15px;
+  line-height: 1.55;
+  text-align: center;
+}
+
+.term-report-chart-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 128px;
+  margin: 0 4px 16px;
+  border: 1px dashed rgba(100, 62, 28, 0.45);
+  border-radius: 6px;
+  background: rgba(255, 239, 192, 0.28);
+  color: rgba(88, 55, 25, 0.52);
+  font-size: 18px;
+}
+
+.term-report-data-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+
+.term-report-data-item {
+  min-height: 72px;
+  padding: 10px;
+  border: 1px solid rgba(107, 68, 31, 0.24);
+  border-radius: 6px;
+  background: rgba(255, 237, 191, 0.34);
+}
+
+.term-report-data-item span {
+  display: block;
+  color: #7a542c;
+  font-size: 12px;
+}
+
+.term-report-data-item strong {
+  display: block;
+  margin-top: 8px;
+  color: #57371e;
+  font-size: 22px;
+}
+
+.term-report-paper-footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 14px;
+  color: #7a542c;
+  font-size: 12px;
 }
 
 .report-mask { position: absolute; inset: 0; z-index: 12; display: flex; align-items: center; justify-content: center; background: rgba(40, 32, 18, 0.28); pointer-events: auto; }
