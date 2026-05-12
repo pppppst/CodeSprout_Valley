@@ -1464,7 +1464,7 @@ onBeforeUnmount(() => {
           <span class="stats-title">实时状态</span>
           <span class="toggle-arrow">{{ isStatsVisible ? '▲' : '▼' }}</span>
         </div>
-        <div v-show="isStatsVisible" class="stats-content">
+        <div class="stats-content">
           <div class="stat-item">
             <span>代码行数: {{ codeLines }}</span>
             <div class="progress-bar">
@@ -1786,7 +1786,12 @@ onBeforeUnmount(() => {
   width: 310px;
   height: 400px;
   overflow: visible;
-  transition: all 0.3s ease;
+  transition:
+    width 0.3s ease,
+    height 0.3s ease,
+    top 0.3s ease,
+    left 0.3s ease,
+    transform 0.3s ease;
   background-image: url('./assets/stats-expanded.png');
   background-repeat: no-repeat;
   background-position: center;
@@ -1794,6 +1799,16 @@ onBeforeUnmount(() => {
   border: none;
   box-shadow: none;
   z-index: 4;
+}
+
+.stats-box::before {
+  content: '';
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+  background-image: url('./assets/stats-expanded.png'), url('./assets/stats-collapsed.png');
+  pointer-events: none;
 }
 
 .stats-header {
@@ -1861,6 +1876,19 @@ onBeforeUnmount(() => {
   bottom: 76px;
   padding: 0;
   color: #4a3f2f;
+  opacity: 1;
+  visibility: visible;
+  transition:
+    opacity 0.16s ease 0.18s,
+    visibility 0s linear 0.18s;
+  pointer-events: auto;
+}
+
+.stats-box.collapsed .stats-content {
+  opacity: 0;
+  visibility: hidden;
+  transition-delay: 0s;
+  pointer-events: none;
 }
 
 .progress-bar {
