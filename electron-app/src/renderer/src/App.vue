@@ -17,12 +17,10 @@ const cloudToken = ref(localStorage.getItem('codeSproutToken') || '')
 const loggedInUser = ref(localStorage.getItem('codeSproutUser') || '')
 const isCloudBusy = ref(false)
 const lastSyncTime = ref(localStorage.getItem('codeSproutLastSyncTime') || '')
-const isReportOpen = ref(false)
-const isGalleryOpen = ref(false)
+const isArchiveOpen = ref(false)
 const hasNewHarvest = ref(false)
 const hasNewReport = ref(false)
-const selectedHarvestTermKey = ref('')
-const selectedReportTermKey = ref('')
+const selectedArchiveTermKey = ref('')
 const latestHarvestTermKey = ref('')
 const latestReportTermKey = ref('')
 
@@ -373,45 +371,26 @@ watch(rewardedCodeThreshold, (newValue) => {
 })
 
 // ==========================================
-// 5. 辅助功能 (图鉴、设置、周报)
+// 5. 辅助功能 (节气档案、设置)
 // ==========================================
-function openGallery() {
-  isGalleryOpen.value = true
+function openArchive() {
+  isArchiveOpen.value = true
   hasNewHarvest.value = false
-  message.value = '📖 正在打开节气图鉴...'
+  hasNewReport.value = false
+  selectedArchiveTermKey.value = getDefaultArchiveTermKey()
+  message.value = '📖 正在打开节气档案...'
   resetCatState(2000)
 }
-function closeGallery() {
-  isGalleryOpen.value = false
-  selectedHarvestTermKey.value = ''
+function closeArchive() {
+  isArchiveOpen.value = false
+  selectedArchiveTermKey.value = ''
 }
-function openHarvestDetail(termKey) {
-  if (!harvestRecords.value[termKey]) return
-  selectedHarvestTermKey.value = termKey
-}
-function closeHarvestDetail() {
-  selectedHarvestTermKey.value = ''
+function selectArchiveTerm(termKey) {
+  selectedArchiveTermKey.value = termKey
 }
 function openSettings() {
   message.value = '⚙️ 正在打开设置...'
   resetCatState(2000)
-}
-function openWeeklyReport() {
-  isReportOpen.value = true
-  hasNewReport.value = false
-  message.value = '🗞️ 正在打开节气周报...'
-  resetCatState(2000)
-}
-function closeWeeklyReport() {
-  isReportOpen.value = false
-  selectedReportTermKey.value = ''
-}
-function openReportDetail(termKey) {
-  if (!reportRecords.value[termKey]) return
-  selectedReportTermKey.value = termKey
-}
-function closeReportDetail() {
-  selectedReportTermKey.value = ''
 }
 function toggleStats() {
   isStatsVisible.value = !isStatsVisible.value
@@ -467,10 +446,20 @@ const solarTermMap = {
 }
 const solarTermNames = Object.keys(solarTermMap)
 const solarTermEntries = solarTermNames.map((name) => ({ name, key: solarTermMap[name] }))
-const plantAssetTermAliases = {
-  bailu: 'Bailu',
-  hanlu: 'Hanlu',
-  qiufen: 'Qiufen'
+
+function getDefaultArchiveTermKey() {
+  if (
+    latestHarvestTermKey.value &&
+    (harvestRecords.value[latestHarvestTermKey.value] || reportRecords.value[latestHarvestTermKey.value])
+  ) return latestHarvestTermKey.value
+  if (
+    latestReportTermKey.value &&
+    (harvestRecords.value[latestReportTermKey.value] || reportRecords.value[latestReportTermKey.value])
+  ) return latestReportTermKey.value
+  const firstRecordedTerm = solarTermEntries.find((term) => {
+    return harvestRecords.value[term.key] || reportRecords.value[term.key]
+  })
+  return firstRecordedTerm?.key || solarTermEntries[0]?.key || ''
 }
 
 const DEFAULT_PLANT_TERM = 'xiazhi'
@@ -517,13 +506,13 @@ const currentBgUrl = computed(() => {
   if (pinyin) {
     return new URL(`./assets/SolarTerm/${pinyin}.png`, import.meta.url).href;
   }
-  return new URL('./assets/initial_background.png', import.meta.url).href;
+  return new URL('./assets/background.png', import.meta.url).href;
 })
 
 function getPlantStageByWaterings(waterings) {
-  if (waterings >= 120) return 4//120
-  if (waterings >= 60) return 3//60
-  if (waterings >= 30) return 2//30
+  if (waterings >= 4) return 4 // 120
+  if (waterings >= 3) return 3 // 60
+  if (waterings >= 2) return 2 // 30
   return 1
 }
 
@@ -538,29 +527,28 @@ const currentPlantStage = computed(() => {
   return getPlantStageByWaterings(waterings)
 })
 
-const selectedHarvestRecord = computed(() => {
-  if (!selectedHarvestTermKey.value) return null
-  return harvestRecords.value[selectedHarvestTermKey.value] || null
+const selectedArchiveTerm = computed(() => {
+  return solarTermEntries.find((term) => term.key === selectedArchiveTermKey.value) || null
 })
 
-const selectedReportRecord = computed(() => {
-  if (!selectedReportTermKey.value) return null
-  return reportRecords.value[selectedReportTermKey.value] || null
+const selectedArchiveHarvestRecord = computed(() => {
+  if (!selectedArchiveTermKey.value) return null
+  return harvestRecords.value[selectedArchiveTermKey.value] || null
 })
 
-const galleryCells = computed(() => {
+const selectedArchiveReportRecord = computed(() => {
+  if (!selectedArchiveTermKey.value) return null
+  return reportRecords.value[selectedArchiveTermKey.value] || null
+})
+
+const archiveCells = computed(() => {
   return solarTermEntries.map((term) => ({
     ...term,
-    record: harvestRecords.value[term.key] || null,
-    isLatest: latestHarvestTermKey.value === term.key
-  }))
-})
-
-const reportCells = computed(() => {
-  return solarTermEntries.map((term) => ({
-    ...term,
-    record: reportRecords.value[term.key] || null,
-    isLatest: latestReportTermKey.value === term.key
+    harvestRecord: harvestRecords.value[term.key] || null,
+    reportRecord: reportRecords.value[term.key] || null,
+    hasRecord: Boolean(harvestRecords.value[term.key] || reportRecords.value[term.key]),
+    isLatest: latestHarvestTermKey.value === term.key || latestReportTermKey.value === term.key,
+    isSelected: selectedArchiveTermKey.value === term.key
   }))
 })
 
@@ -1103,8 +1091,7 @@ const plantImageConfig = {
 };
 
 function getPlantImageUrl(termKey, stage) {
-  const assetTermKey = plantAssetTermAliases[termKey] || termKey
-  const imageKey = `./assets/${assetTermKey}/stage${stage}.png`
+  const imageKey = `./assets/${termKey}/stage${stage}.png`
   const fallbackKey = `./assets/${DEFAULT_PLANT_TERM}/stage${DEFAULT_PLANT_STAGE}.png`
 
   if (plantImageModules[imageKey]) return plantImageModules[imageKey]
@@ -1217,10 +1204,8 @@ function restoreSnapshot(snapshot) {
   hasNewReport.value = !!snapshot.hasNewReport
   latestHarvestTermKey.value = snapshot.latestHarvestTermKey || ''
   latestReportTermKey.value = snapshot.latestReportTermKey || ''
-  selectedHarvestTermKey.value = ''
-  selectedReportTermKey.value = ''
-  isGalleryOpen.value = false
-  isReportOpen.value = false
+  selectedArchiveTermKey.value = ''
+  isArchiveOpen.value = false
   suppressResourceRewards.value = true
   codeLines.value = snapshot.codeLines
   highestRewardedThreshold.value = snapshot.highestRewardedThreshold
@@ -1345,8 +1330,8 @@ function simulateTermSettlement() {
   plantWaterByTerm.value = { [nextTermKey]: 0 }
   waterCount.value = 0
   isTimeMachineOpen.value = false
-  isReportOpen.value = false
-  message.value = `✨ ${settledTermName}结算完成，图鉴和节气报告都有新内容！`
+  isArchiveOpen.value = false
+  message.value = `✨ ${settledTermName}结算完成，节气档案有新内容！`
   resetCatState(3000)
 }
 
@@ -1479,7 +1464,7 @@ onBeforeUnmount(() => {
           <span class="stats-title">实时状态</span>
           <span class="toggle-arrow">{{ isStatsVisible ? '▲' : '▼' }}</span>
         </div>
-        <div v-show="isStatsVisible" class="stats-content">
+        <div class="stats-content">
           <div class="stat-item">
             <span>代码行数: {{ codeLines }}</span>
             <div class="progress-bar">
@@ -1534,103 +1519,107 @@ onBeforeUnmount(() => {
       <div v-show="!isFloatingMode" class="action-panel" style="-webkit-app-region: no-drag;">
         <button class="image-btn" @click="feedCat" aria-label="喂猫粮"><img src="./assets/btn-feed.png" draggable="false"></button>
         <button class="image-btn" @click="waterPlant" aria-label="浇水"><img src="./assets/btn-water.png" draggable="false"></button>
-        <button class="image-btn image-btn-gallery" :class="{ glowing: hasNewHarvest }" @click="openGallery" aria-label="图鉴合集"><img src="./assets/btn-gallery.png" draggable="false"></button>
+        <button class="image-btn image-btn-archive" :class="{ glowing: hasNewHarvest || hasNewReport }" @click="openArchive" aria-label="节气档案"><img src="./assets/btn-gallery.png" draggable="false"></button>
         <button class="image-btn image-btn-settings" @click="openSettings" aria-label="设置"><img src="./assets/btn-settings.png" draggable="false"></button>
-        <button class="image-btn image-btn-weekly-report" :class="{ glowing: hasNewReport }" @click="openWeeklyReport" aria-label="节气周报"><img src="./assets/btn-weekly-report.png" draggable="false"></button>
         <button class="image-btn" @click="openTimeMachine" aria-label="沙盘模式"><img src="./assets/btn_shapanmode.png" draggable="false"></button>
       </div>
 
       <div
-        v-if="isGalleryOpen && !isFloatingMode"
-        class="gallery-mask"
+        v-if="isArchiveOpen && !isFloatingMode"
+        class="archive-mask"
         style="-webkit-app-region: no-drag;"
-        @click.self="closeGallery"
+        @click.self="closeArchive"
       >
-        <section class="gallery-panel">
-          <div class="gallery-header">
-            <h2>节气图鉴</h2>
-            <button class="gallery-close" @click="closeGallery">×</button>
+        <section class="archive-book-panel">
+          <div class="archive-book-header">
+            <div>
+              <span class="archive-book-kicker">CodeSprout Valley</span>
+              <h2>节气档案</h2>
+            </div>
+            <button class="archive-close" @click="closeArchive">×</button>
           </div>
-          <div class="gallery-grid">
-            <button
-              v-for="cell in galleryCells"
-              :key="cell.key"
-              class="gallery-cell"
-              :class="{ harvested: cell.record, sparkling: cell.isLatest && cell.record }"
-              @click="openHarvestDetail(cell.key)"
-            >
-              <span class="gallery-term">{{ cell.name }}</span>
-              <img v-if="cell.record" class="gallery-harvest-img" :src="cell.record.image" draggable="false" />
-            </button>
-          </div>
-
-          <div
-            v-if="selectedHarvestRecord"
-            class="harvest-detail-mask"
-            @click.self="closeHarvestDetail"
-          >
-            <section class="harvest-detail-paper">
-              <button class="harvest-detail-close" @click="closeHarvestDetail">×</button>
-              <img class="harvest-detail-img" :src="selectedHarvestRecord.image" draggable="false" />
-              <p class="harvest-detail-term">{{ selectedHarvestRecord.termName }} · 第 {{ selectedHarvestRecord.stage }} 阶段</p>
-              <p class="harvest-detail-copy">{{ selectedHarvestRecord.message }}</p>
-            </section>
-          </div>
-        </section>
-      </div>
-
-      <div
-        v-if="isReportOpen && !isFloatingMode"
-        class="term-report-mask"
-        style="-webkit-app-region: no-drag;"
-        @click.self="closeWeeklyReport"
-      >
-        <section class="term-report-panel">
-          <div class="term-report-header">
-            <h2>节气报告</h2>
-            <button class="term-report-close" @click="closeWeeklyReport">×</button>
-          </div>
-          <div class="term-report-grid">
-            <button
-              v-for="cell in reportCells"
-              :key="cell.key"
-              class="term-report-cell"
-              :class="{ recorded: cell.record, sparkling: cell.isLatest && cell.record }"
-              @click="openReportDetail(cell.key)"
-            >
-              <span class="term-report-name">{{ cell.name }}</span>
-              <span v-if="cell.record" class="paper-scroll" aria-hidden="true">
-                <span class="paper-scroll-body"></span>
-              </span>
-            </button>
-          </div>
-
-          <div
-            v-if="selectedReportRecord"
-            class="term-report-detail-mask"
-            @click.self="closeReportDetail"
-          >
-            <section class="term-report-paper">
-              <button class="term-report-detail-close" @click="closeReportDetail">×</button>
-              <p class="term-report-paper-date">{{ selectedReportRecord.date }}</p>
-              <h2>{{ selectedReportRecord.title }}</h2>
-              <p class="term-report-paper-summary">{{ selectedReportRecord.summary }}</p>
-
-              <div class="term-report-chart-placeholder">
-                <span>节气图</span>
+          <div class="archive-book-body">
+            <div class="archive-left-page">
+              <div class="archive-tab-row" aria-hidden="true">
+                <span></span><span></span><span></span>
               </div>
-
-              <div class="term-report-data-grid">
-                <div class="term-report-data-item"><span>累计代码</span><strong>{{ selectedReportRecord.totalCodeLines }}</strong></div>
-                <div class="term-report-data-item"><span>通过率</span><strong>{{ selectedReportRecord.passRate }}</strong></div>
-                <div class="term-report-data-item"><span>今日通过</span><strong>{{ selectedReportRecord.todayPassed }}</strong></div>
-                <div class="term-report-data-item"><span>今日报错</span><strong>{{ selectedReportRecord.todayErrors }}</strong></div>
-                <div class="term-report-data-item"><span>照料次数</span><strong>{{ selectedReportRecord.totalActions }}</strong></div>
-                <div class="term-report-data-item"><span>植物阶段</span><strong>{{ selectedReportRecord.plantStage }}</strong></div>
+              <div class="archive-grid">
+                <button
+                  v-for="cell in archiveCells"
+                  :key="cell.key"
+                  class="archive-cell"
+                  :class="{ recorded: cell.hasRecord, selected: cell.isSelected, sparkling: cell.isLatest && cell.hasRecord }"
+                  @click="selectArchiveTerm(cell.key)"
+                >
+                  <span class="archive-term">{{ cell.name }}</span>
+                  <span v-if="cell.hasRecord" class="archive-file-icon" aria-hidden="true">
+                    <span class="archive-file-corner"></span>
+                  </span>
+                  <span v-else class="archive-empty-mark" aria-hidden="true">◇</span>
+                </button>
               </div>
+            </div>
 
-              <div class="term-report-paper-footer"><span>{{ selectedReportRecord.owner }}</span><span>{{ selectedReportRecord.syncText }}</span></div>
-            </section>
+            <aside class="archive-detail-page">
+              <div class="archive-detail-line"></div>
+              <h3>{{ selectedArchiveTerm ? selectedArchiveTerm.name : '节气' }}</h3>
+              <p class="archive-status-copy">
+                <span v-if="selectedArchiveHarvestRecord && selectedArchiveReportRecord">图鉴收获与节气报告已归档</span>
+                <span v-else-if="selectedArchiveHarvestRecord">已收获果实，暂未生成节气报告</span>
+                <span v-else-if="selectedArchiveReportRecord">已生成节气报告，暂未收获果实</span>
+                <span v-else>这个节气还没有归档内容</span>
+              </p>
+
+              <div class="archive-detail-scroll">
+                <section class="archive-section archive-harvest-section">
+                  <h4>图鉴收获</h4>
+                  <div class="archive-picture-frame">
+                    <span class="archive-tape" aria-hidden="true"></span>
+                    <img
+                      v-if="selectedArchiveHarvestRecord"
+                      class="harvest-detail-img"
+                      :src="selectedArchiveHarvestRecord.image"
+                      draggable="false"
+                    />
+                    <span v-else class="archive-picture-placeholder">暂无收获</span>
+                  </div>
+                  <p v-if="selectedArchiveHarvestRecord" class="harvest-detail-term">
+                    第 {{ selectedArchiveHarvestRecord.stage }} 阶段 · {{ selectedArchiveHarvestRecord.itemName }}
+                  </p>
+                  <p v-if="selectedArchiveHarvestRecord" class="harvest-detail-copy">{{ selectedArchiveHarvestRecord.message }}</p>
+                  <p v-else class="archive-empty-copy">这个节气还没有收获，完成一次沙盘结算后，果实会来到这里。</p>
+                </section>
+
+                <section class="archive-section archive-report-section">
+                  <h4>节气报告</h4>
+                  <p class="term-report-paper-date">
+                    {{ selectedArchiveReportRecord ? selectedArchiveReportRecord.date : '等待结算' }}
+                  </p>
+                  <p v-if="selectedArchiveReportRecord" class="term-report-paper-summary">
+                    {{ selectedArchiveReportRecord.summary }}
+                  </p>
+                  <p v-else class="archive-empty-copy">暂无节气报告，完成一次沙盘结算后会生成记录。</p>
+
+                  <div class="term-report-chart-placeholder archive-picture-frame">
+                    <span class="archive-tape" aria-hidden="true"></span>
+                    <span>节气图</span>
+                  </div>
+
+                  <div v-if="selectedArchiveReportRecord" class="term-report-data-grid">
+                    <div class="term-report-data-item"><span>累计代码</span><strong>{{ selectedArchiveReportRecord.totalCodeLines }}</strong></div>
+                    <div class="term-report-data-item"><span>通过率</span><strong>{{ selectedArchiveReportRecord.passRate }}</strong></div>
+                    <div class="term-report-data-item"><span>今日通过</span><strong>{{ selectedArchiveReportRecord.todayPassed }}</strong></div>
+                    <div class="term-report-data-item"><span>今日报错</span><strong>{{ selectedArchiveReportRecord.todayErrors }}</strong></div>
+                    <div class="term-report-data-item"><span>照料次数</span><strong>{{ selectedArchiveReportRecord.totalActions }}</strong></div>
+                    <div class="term-report-data-item"><span>植物阶段</span><strong>{{ selectedArchiveReportRecord.plantStage }}</strong></div>
+                  </div>
+
+                  <div v-if="selectedArchiveReportRecord" class="term-report-paper-footer">
+                    <span>{{ selectedArchiveReportRecord.owner }}</span><span>{{ selectedArchiveReportRecord.syncText }}</span>
+                  </div>
+                </section>
+              </div>
+            </aside>
           </div>
         </section>
       </div>
@@ -1797,7 +1786,12 @@ onBeforeUnmount(() => {
   width: 310px;
   height: 400px;
   overflow: visible;
-  transition: all 0.3s ease;
+  transition:
+    width 0.3s ease,
+    height 0.3s ease,
+    top 0.3s ease,
+    left 0.3s ease,
+    transform 0.3s ease;
   background-image: url('./assets/stats-expanded.png');
   background-repeat: no-repeat;
   background-position: center;
@@ -1805,6 +1799,16 @@ onBeforeUnmount(() => {
   border: none;
   box-shadow: none;
   z-index: 4;
+}
+
+.stats-box::before {
+  content: '';
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+  background-image: url('./assets/stats-expanded.png'), url('./assets/stats-collapsed.png');
+  pointer-events: none;
 }
 
 .stats-header {
@@ -1872,6 +1876,19 @@ onBeforeUnmount(() => {
   bottom: 76px;
   padding: 0;
   color: #4a3f2f;
+  opacity: 1;
+  visibility: visible;
+  transition:
+    opacity 0.16s ease 0.18s,
+    visibility 0s linear 0.18s;
+  pointer-events: auto;
+}
+
+.stats-box.collapsed .stats-content {
+  opacity: 0;
+  visibility: hidden;
+  transition-delay: 0s;
+  pointer-events: none;
 }
 
 .progress-bar {
@@ -2035,455 +2052,427 @@ onBeforeUnmount(() => {
   transform: translateY(2px);
 }
 
-.image-btn-gallery.glowing {
+.image-btn-archive.glowing {
   animation: galleryButtonGlow 1.25s ease-in-out infinite;
   filter: drop-shadow(0 0 10px rgba(255, 210, 74, 0.95));
 }
 
-.image-btn-weekly-report.glowing {
-  animation: galleryButtonGlow 1.25s ease-in-out infinite;
-  filter: drop-shadow(0 0 10px rgba(255, 210, 74, 0.95));
-}
-
-.gallery-mask {
+.archive-mask {
   position: absolute;
   inset: 0;
   z-index: 13;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(39, 27, 14, 0.36);
+  background: rgba(58, 45, 29, 0.28);
   pointer-events: auto;
 }
 
-.gallery-panel {
+.archive-book-panel {
   position: relative;
-  width: 760px;
-  padding: 18px;
-  border: 2px solid #7b4f2e;
-  border-radius: 8px;
+  width: 940px;
+  padding: 18px 20px 20px;
+  border: 3px solid #b2aca0;
+  border-radius: 18px 32px 22px 18px;
   background:
-    linear-gradient(90deg, rgba(255,255,255,0.08), rgba(0,0,0,0.08)),
-    repeating-linear-gradient(0deg, #9c6a3d 0, #9c6a3d 18px, #8a5832 19px, #a87645 36px);
-  color: #f8e9c6;
-  box-shadow: 0 20px 46px rgba(38, 25, 12, 0.36);
+    linear-gradient(90deg, rgba(185, 213, 161, 0.22), transparent 13%, transparent 87%, rgba(237, 174, 92, 0.16)),
+    linear-gradient(92deg, #f7f0df 0%, #efe5cf 49%, #d8d1c3 50%, #f6eddc 51%, #f1e4cc 100%);
+  color: #4e3823;
+  box-shadow: 0 20px 44px rgba(62, 47, 28, 0.3), inset 0 0 0 8px rgba(255, 255, 255, 0.28);
 }
 
-.gallery-header {
+.archive-book-panel::before {
+  content: "";
+  position: absolute;
+  top: 58px;
+  bottom: 18px;
+  left: 50%;
+  width: 10px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(145, 137, 123, 0.16), rgba(255, 255, 255, 0.46), rgba(118, 108, 94, 0.2));
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.archive-book-header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
-  margin-bottom: 14px;
+  margin-bottom: 12px;
+  padding: 0 4px 0 10px;
 }
 
-.gallery-header h2 {
-  margin: 0;
-  font-size: 24px;
-  text-shadow: 0 2px 0 rgba(68, 39, 20, 0.55);
-}
-
-.gallery-close,
-.harvest-detail-close {
-  width: 32px;
-  height: 32px;
-  border: 0;
-  border-radius: 50%;
-  color: #fff3cf;
-  background: rgba(78, 43, 20, 0.45);
-  cursor: pointer;
-  font-size: 22px;
+.archive-book-kicker {
+  display: block;
+  color: #7f9b58;
+  font-size: 11px;
+  letter-spacing: 0;
   line-height: 1;
 }
 
-.gallery-grid {
-  display: grid;
-  grid-template-columns: repeat(6, 1fr);
-  grid-template-rows: repeat(4, 104px);
-  gap: 10px;
+.archive-book-header h2 {
+  margin: 3px 0 0;
+  color: #4d3a26;
+  font-family: "华文中宋", KaiTi, STKaiti, serif;
+  font-size: 26px;
+  line-height: 1.1;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.7);
 }
 
-.gallery-cell {
+.archive-close {
+  width: 32px;
+  height: 32px;
+  border: 1px solid rgba(134, 99, 58, 0.26);
+  border-radius: 50%;
+  color: #6e5638;
+  background: rgba(255, 236, 196, 0.72);
+  cursor: pointer;
+  font-size: 22px;
+  line-height: 1;
+  box-shadow: 0 3px 0 rgba(150, 112, 65, 0.18);
+}
+
+.archive-book-body {
   position: relative;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 30px;
+}
+
+.archive-left-page,
+.archive-detail-page {
+  position: relative;
+  min-height: 510px;
+  padding: 22px 20px;
+  border: 1px solid rgba(154, 138, 112, 0.28);
+  border-radius: 12px;
+  background:
+    radial-gradient(circle at 18% 12%, rgba(255, 255, 255, 0.58), transparent 28%),
+    linear-gradient(135deg, rgba(255, 249, 230, 0.72), rgba(238, 222, 190, 0.62));
+  box-shadow: inset 0 0 20px rgba(169, 143, 95, 0.12);
+}
+
+.archive-tab-row {
+  display: flex;
+  gap: 8px;
+  margin: 0 0 18px 18px;
+}
+
+.archive-tab-row span {
+  width: 42px;
+  height: 34px;
+  border: 2px solid rgba(169, 126, 58, 0.28);
+  border-radius: 50%;
+  background:
+    radial-gradient(circle, rgba(255, 226, 136, 0.76) 0 30%, transparent 32%),
+    rgba(246, 231, 191, 0.82);
+  box-shadow: 0 3px 0 rgba(153, 112, 59, 0.14);
+}
+
+.archive-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 58px);
+  grid-template-rows: repeat(4, 68px);
+  justify-content: center;
+  gap: 7px;
+}
+
+.archive-cell {
+  position: relative;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: flex-start;
-  gap: 4px;
+  gap: 3px;
   min-width: 0;
-  padding: 8px 6px;
-  border: 2px solid rgba(76, 42, 20, 0.78);
-  border-radius: 6px;
+  padding: 5px 4px;
+  border: 2px solid rgba(139, 107, 67, 0.52);
+  border-radius: 4px;
   background:
-    linear-gradient(135deg, rgba(255,255,255,0.12), rgba(0,0,0,0.08)),
-    #b17842;
-  box-shadow: inset 0 2px 0 rgba(255,255,255,0.16), inset 0 -4px 0 rgba(74, 41, 21, 0.18);
-  color: #fff1c8;
-  cursor: default;
-}
-
-.gallery-cell.harvested {
+    linear-gradient(135deg, rgba(255, 255, 255, 0.3), rgba(128, 86, 42, 0.1)),
+    repeating-linear-gradient(92deg, #d1a168 0, #d1a168 8px, #c18c55 9px, #e0b779 16px, #b77f4d 17px, #d5a568 24px);
+  box-shadow:
+    0 3px 5px rgba(103, 73, 42, 0.2),
+    inset 0 2px 0 rgba(255, 241, 201, 0.3),
+    inset 0 -4px 0 rgba(112, 75, 39, 0.18),
+    inset 0 0 9px rgba(82, 51, 24, 0.14);
+  color: #1f140b;
   cursor: pointer;
 }
 
-.gallery-cell.harvested:hover {
-  filter: brightness(1.08);
-}
-
-.gallery-cell.sparkling {
-  animation: harvestCellGlow 1.2s ease-in-out infinite;
-}
-
-.gallery-term {
-  width: 100%;
-  overflow: hidden;
-  color: #fff4d3;
-  font-size: 15px;
-  line-height: 1.2;
-  text-align: center;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  text-shadow: 0 1px 0 rgba(62, 32, 14, 0.7);
-}
-
-.gallery-harvest-img {
-  width: 66px;
-  height: 66px;
-  object-fit: contain;
-  filter: drop-shadow(0 4px 4px rgba(63, 33, 12, 0.32));
-}
-
-.harvest-detail-mask {
-  position: fixed;
-  inset: 0;
-  z-index: 15;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(31, 20, 10, 0.32);
-}
-
-.harvest-detail-paper {
-  position: relative;
-  width: 420px;
-  min-height: 470px;
-  padding: 30px 34px;
-  border-radius: 8px;
-  border: 1px solid rgba(116, 74, 35, 0.45);
-  background:
-    radial-gradient(circle at 18% 12%, rgba(255,255,255,0.28), transparent 24%),
-    linear-gradient(135deg, #ead19b, #d7ad6a 48%, #ebd19c);
-  color: #5d3920;
-  text-align: center;
-  box-shadow: 0 18px 44px rgba(36, 22, 10, 0.34);
-}
-
-.harvest-detail-paper::before {
+.archive-cell::before {
   content: "";
   position: absolute;
-  inset: 10px;
-  border: 1px dashed rgba(105, 66, 32, 0.38);
-  border-radius: 6px;
+  inset: 3px;
+  border-radius: 3px;
+  background:
+    radial-gradient(ellipse at 24% 36%, rgba(106, 65, 30, 0.12), transparent 30%),
+    radial-gradient(ellipse at 74% 62%, rgba(255, 235, 170, 0.16), transparent 34%);
   pointer-events: none;
 }
 
-.harvest-detail-close {
+.archive-cell:hover {
+  filter: brightness(1.04);
+  transform: translateY(-1px);
+}
+
+.archive-cell.selected {
+  border-color: #dc9145;
+  background:
+    linear-gradient(135deg, rgba(255, 245, 195, 0.36), rgba(221, 143, 61, 0.18)),
+    repeating-linear-gradient(92deg, #e2b56f 0, #e2b56f 8px, #cf9656 9px, #edc77f 16px, #c4894d 17px, #e0ad66 24px);
+  box-shadow:
+    0 0 0 3px rgba(255, 207, 97, 0.42),
+    0 5px 10px rgba(121, 80, 38, 0.24),
+    inset 0 0 12px rgba(255, 229, 154, 0.38);
+}
+
+.archive-cell.sparkling {
+  animation: harvestCellGlow 1.2s ease-in-out infinite;
+}
+
+.archive-term {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  overflow: hidden;
+  color: #191109;
+  font-family: KaiTi, STKaiti, "KaiTi_GB2312", serif;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.15;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-shadow: 0 1px 0 rgba(255, 232, 182, 0.34);
+}
+
+.archive-file-icon {
+  position: relative;
+  z-index: 1;
+  display: block;
+  width: 34px;
+  height: 38px;
+  margin-top: 2px;
+  border: 2px solid rgba(112, 80, 45, 0.32);
+  border-radius: 4px;
+  background:
+    repeating-linear-gradient(0deg, rgba(128, 86, 39, 0.1) 0, rgba(128, 86, 39, 0.1) 1px, transparent 1px, transparent 7px),
+    linear-gradient(135deg, #f8e5b6, #e3bd77);
+  box-shadow: 0 4px 5px rgba(95, 61, 28, 0.22);
+}
+
+.archive-file-corner {
   position: absolute;
-  top: 14px;
-  right: 14px;
-  color: #6b3c1e;
-  background: rgba(107, 60, 30, 0.12);
+  top: -2px;
+  right: -2px;
+  width: 13px;
+  height: 13px;
+  border-left: 1px solid rgba(112, 80, 45, 0.28);
+  border-bottom: 1px solid rgba(112, 80, 45, 0.28);
+  border-radius: 0 3px 0 3px;
+  background: #f3d497;
+}
+
+.archive-empty-mark {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  color: rgba(105, 88, 62, 0.38);
+  font-size: 24px;
+  line-height: 1;
+}
+
+.archive-detail-page {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 24px 30px;
+  text-align: center;
+  overflow: hidden;
+}
+
+.archive-detail-line {
+  width: 82%;
+  height: 3px;
+  margin-bottom: 20px;
+  border-radius: 999px;
+  background: rgba(153, 143, 128, 0.42);
+}
+
+.archive-picture-frame {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 270px;
+  min-height: 190px;
+  margin: 0 auto 18px;
+  border: 5px solid rgba(157, 129, 89, 0.42);
+  border-radius: 8px;
+  background: #fff0cf;
+  box-shadow:
+    0 8px 14px rgba(103, 78, 43, 0.2),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.72);
+}
+
+.archive-status-copy {
+  margin: 8px 0 14px;
+  color: #7b8f4f;
+  font-size: 14px;
+}
+
+.archive-detail-scroll {
+  width: 100%;
+  max-height: 408px;
+  overflow-y: auto;
+  padding: 16px 10px 4px;
+  scrollbar-color: #d89d58 rgba(225, 202, 163, 0.5);
+  scrollbar-width: thin;
+}
+
+.archive-detail-scroll::-webkit-scrollbar {
+  width: 9px;
+}
+
+.archive-detail-scroll::-webkit-scrollbar-track {
+  border-radius: 999px;
+  background: rgba(225, 202, 163, 0.42);
+}
+
+.archive-detail-scroll::-webkit-scrollbar-thumb {
+  border: 2px solid rgba(246, 235, 211, 0.88);
+  border-radius: 999px;
+  background: #d89d58;
+}
+
+.archive-section {
+  position: relative;
+  padding: 18px 14px 20px;
+  border: 1px solid rgba(150, 124, 82, 0.22);
+  border-radius: 10px;
+  background: rgba(255, 248, 228, 0.54);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.55);
+}
+
+.archive-section + .archive-section {
+  margin-top: 16px;
+}
+
+.archive-section h4 {
+  margin: 0 0 14px;
+  color: #5c432b;
+  font-family: "华文中宋", KaiTi, STKaiti, serif;
+  font-size: 22px;
+  line-height: 1.1;
+}
+
+.archive-tape {
+  position: absolute;
+  top: -28px;
+  left: 50%;
+  width: 38px;
+  height: 48px;
+  border: 1px solid rgba(151, 119, 74, 0.18);
+  border-radius: 2px;
+  background: rgba(238, 207, 149, 0.78);
+  box-shadow: 0 2px 4px rgba(103, 78, 43, 0.14);
+  transform: translateX(-50%) rotate(-3deg);
 }
 
 .harvest-detail-img {
-  position: relative;
-  z-index: 1;
-  width: 240px;
-  height: 240px;
+  width: 210px;
+  height: 210px;
   object-fit: contain;
-  margin-top: 18px;
-  filter: drop-shadow(0 8px 8px rgba(89, 51, 22, 0.24));
+  filter: drop-shadow(0 8px 8px rgba(89, 51, 22, 0.2));
 }
 
-.harvest-detail-term,
-.harvest-detail-copy {
-  position: relative;
-  z-index: 1;
+.archive-picture-placeholder {
+  color: rgba(101, 78, 47, 0.48);
+  font-family: KaiTi, STKaiti, serif;
+  font-size: 22px;
+}
+
+.archive-detail-page h3 {
+  margin: 0;
+  color: #4d3722;
+  font-family: "华文中宋", KaiTi, STKaiti, serif;
+  font-size: 34px;
+  line-height: 1.15;
 }
 
 .harvest-detail-term {
-  margin: 10px 0 8px;
-  color: #7c4d26;
-  font-size: 15px;
+  margin: 8px 0 12px;
+  color: #7b8f4f;
+  font-size: 14px;
 }
 
-.harvest-detail-copy {
+.harvest-detail-copy,
+.archive-empty-copy,
+.term-report-paper-summary {
   margin: 0;
-  color: #57371e;
-  font-size: 20px;
+  color: #5a4630;
+  font-size: 18px;
   line-height: 1.55;
-}
-
-.term-report-mask {
-  position: absolute;
-  inset: 0;
-  z-index: 13;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(39, 27, 14, 0.36);
-  pointer-events: auto;
-}
-
-.term-report-panel {
-  position: relative;
-  width: 760px;
-  padding: 18px;
-  border: 2px solid #7b4f2e;
-  border-radius: 8px;
-  background:
-    linear-gradient(90deg, rgba(255,255,255,0.08), rgba(0,0,0,0.08)),
-    repeating-linear-gradient(0deg, #9c6a3d 0, #9c6a3d 18px, #8a5832 19px, #a87645 36px);
-  color: #f8e9c6;
-  box-shadow: 0 20px 46px rgba(38, 25, 12, 0.36);
-}
-
-.term-report-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 14px;
-}
-
-.term-report-header h2 {
-  margin: 0;
-  font-size: 24px;
-  text-shadow: 0 2px 0 rgba(68, 39, 20, 0.55);
-}
-
-.term-report-close,
-.term-report-detail-close {
-  width: 32px;
-  height: 32px;
-  border: 0;
-  border-radius: 50%;
-  color: #fff3cf;
-  background: rgba(78, 43, 20, 0.45);
-  cursor: pointer;
-  font-size: 22px;
-  line-height: 1;
-}
-
-.term-report-grid {
-  display: grid;
-  grid-template-columns: repeat(6, 1fr);
-  grid-template-rows: repeat(4, 104px);
-  gap: 10px;
-}
-
-.term-report-cell {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: flex-start;
-  gap: 6px;
-  min-width: 0;
-  padding: 8px 6px;
-  border: 2px solid rgba(76, 42, 20, 0.78);
-  border-radius: 6px;
-  background:
-    linear-gradient(135deg, rgba(255,255,255,0.12), rgba(0,0,0,0.08)),
-    #b17842;
-  box-shadow: inset 0 2px 0 rgba(255,255,255,0.16), inset 0 -4px 0 rgba(74, 41, 21, 0.18);
-  color: #fff1c8;
-  cursor: default;
-}
-
-.term-report-cell.recorded {
-  cursor: pointer;
-}
-
-.term-report-cell.recorded:hover {
-  filter: brightness(1.08);
-}
-
-.term-report-cell.sparkling {
-  animation: harvestCellGlow 1.2s ease-in-out infinite;
-}
-
-.term-report-name {
-  width: 100%;
-  overflow: hidden;
-  color: #fff4d3;
-  font-size: 15px;
-  line-height: 1.2;
-  text-align: center;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  text-shadow: 0 1px 0 rgba(62, 32, 14, 0.7);
-}
-
-.paper-scroll {
-  position: relative;
-  display: block;
-  width: 68px;
-  height: 50px;
-  margin-top: 3px;
-  filter: drop-shadow(0 5px 5px rgba(63, 33, 12, 0.32));
-}
-
-.paper-scroll::before,
-.paper-scroll::after {
-  content: "";
-  position: absolute;
-  top: 9px;
-  width: 16px;
-  height: 32px;
-  border-radius: 999px;
-  background: linear-gradient(90deg, #8b5730, #c99554 48%, #7a4527);
-  box-shadow: inset 0 0 0 2px rgba(86, 48, 24, 0.28);
-}
-
-.paper-scroll::before {
-  left: 3px;
-}
-
-.paper-scroll::after {
-  right: 3px;
-}
-
-.paper-scroll-body {
-  position: absolute;
-  left: 13px;
-  top: 12px;
-  width: 42px;
-  height: 26px;
-  border-radius: 4px;
-  background:
-    repeating-linear-gradient(0deg, rgba(128, 86, 39, 0.16) 0, rgba(128, 86, 39, 0.16) 1px, transparent 1px, transparent 6px),
-    linear-gradient(135deg, #f0d79d, #dba964);
-  box-shadow: inset 0 0 0 1px rgba(104, 65, 29, 0.24);
-}
-
-.term-report-detail-mask {
-  position: fixed;
-  inset: 0;
-  z-index: 15;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(31, 20, 10, 0.32);
-}
-
-.term-report-paper {
-  position: relative;
-  width: 560px;
-  min-height: 560px;
-  padding: 28px 34px;
-  border-radius: 8px;
-  border: 1px solid rgba(116, 74, 35, 0.45);
-  background:
-    radial-gradient(circle at 18% 12%, rgba(255,255,255,0.28), transparent 24%),
-    linear-gradient(135deg, #ead19b, #d7ad6a 48%, #ebd19c);
-  color: #5d3920;
-  box-shadow: 0 18px 44px rgba(36, 22, 10, 0.34);
-}
-
-.term-report-paper::before {
-  content: "";
-  position: absolute;
-  inset: 10px;
-  border: 1px dashed rgba(105, 66, 32, 0.38);
-  border-radius: 6px;
-  pointer-events: none;
-}
-
-.term-report-detail-close {
-  position: absolute;
-  top: 14px;
-  right: 14px;
-  color: #6b3c1e;
-  background: rgba(107, 60, 30, 0.12);
-}
-
-.term-report-paper h2,
-.term-report-paper-date,
-.term-report-paper-summary,
-.term-report-chart-placeholder,
-.term-report-data-grid,
-.term-report-paper-footer {
-  position: relative;
-  z-index: 1;
-}
-
-.term-report-paper h2 {
-  margin: 2px 0 8px;
-  color: #5d3920;
-  font-size: 28px;
-  text-align: center;
 }
 
 .term-report-paper-date {
-  margin: 0;
-  color: #7c4d26;
-  font-size: 14px;
-  text-align: center;
-}
-
-.term-report-paper-summary {
-  margin: 10px 0 14px;
-  color: #57371e;
-  font-size: 15px;
-  line-height: 1.55;
-  text-align: center;
+  margin: 0 0 4px;
+  color: #8a7658;
+  font-size: 13px;
 }
 
 .term-report-chart-placeholder {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 128px;
-  margin: 0 4px 16px;
-  border: 1px dashed rgba(100, 62, 28, 0.45);
-  border-radius: 6px;
-  background: rgba(255, 239, 192, 0.28);
-  color: rgba(88, 55, 25, 0.52);
-  font-size: 18px;
+  min-height: 118px;
+  margin-top: 18px;
+  color: rgba(84, 111, 67, 0.58);
+  font-family: KaiTi, STKaiti, serif;
+  font-size: 22px;
 }
 
 .term-report-data-grid {
   display: grid;
+  width: 100%;
   grid-template-columns: repeat(3, 1fr);
-  gap: 10px;
+  gap: 9px;
+  margin-top: 16px;
 }
 
 .term-report-data-item {
-  min-height: 72px;
-  padding: 10px;
-  border: 1px solid rgba(107, 68, 31, 0.24);
-  border-radius: 6px;
-  background: rgba(255, 237, 191, 0.34);
+  min-height: 66px;
+  padding: 9px;
+  border: 1px solid rgba(125, 145, 83, 0.24);
+  border-radius: 7px;
+  background: rgba(243, 247, 218, 0.72);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.5);
 }
 
 .term-report-data-item span {
   display: block;
-  color: #7a542c;
+  color: #7c785e;
   font-size: 12px;
 }
 
 .term-report-data-item strong {
   display: block;
-  margin-top: 8px;
-  color: #57371e;
-  font-size: 22px;
+  margin-top: 7px;
+  color: #4d6d3e;
+  font-size: 21px;
 }
 
 .term-report-paper-footer {
   display: flex;
+  width: 100%;
   justify-content: space-between;
   gap: 12px;
   margin-top: 14px;
-  color: #7a542c;
+  padding-top: 14px;
+  color: #857458;
   font-size: 12px;
 }
 
