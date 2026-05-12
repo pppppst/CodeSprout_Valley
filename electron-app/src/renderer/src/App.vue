@@ -462,12 +462,6 @@ function getDefaultArchiveTermKey() {
   return firstRecordedTerm?.key || solarTermEntries[0]?.key || ''
 }
 
-const plantAssetTermAliases = {
-  bailu: 'Bailu',
-  hanlu: 'Hanlu',
-  qiufen: 'Qiufen'
-}
-
 const DEFAULT_PLANT_TERM = 'xiazhi'
 const DEFAULT_PLANT_STAGE = 1
 const plantImageModules = import.meta.glob('./assets/*/stage*.png', {
@@ -512,7 +506,7 @@ const currentBgUrl = computed(() => {
   if (pinyin) {
     return new URL(`./assets/SolarTerm/${pinyin}.png`, import.meta.url).href;
   }
-  return new URL('./assets/initial_background.png', import.meta.url).href;
+  return new URL('./assets/background.png', import.meta.url).href;
 })
 
 function getPlantStageByWaterings(waterings) {
@@ -1097,8 +1091,7 @@ const plantImageConfig = {
 };
 
 function getPlantImageUrl(termKey, stage) {
-  const assetTermKey = plantAssetTermAliases[termKey] || termKey
-  const imageKey = `./assets/${assetTermKey}/stage${stage}.png`
+  const imageKey = `./assets/${termKey}/stage${stage}.png`
   const fallbackKey = `./assets/${DEFAULT_PLANT_TERM}/stage${DEFAULT_PLANT_STAGE}.png`
 
   if (plantImageModules[imageKey]) return plantImageModules[imageKey]
