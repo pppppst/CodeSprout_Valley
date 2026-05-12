@@ -184,7 +184,7 @@ function updateUiScale() {
 // 2. 核心业务与资源状态
 // ==========================================
 const codeLines = ref(150)
-const syncedCodeLines = ref(0);
+const syncedCodeLines = ref(0)
 const catExp = ref(0)
 const message = ref('🐱 睡觉中...')
 
@@ -208,75 +208,242 @@ const plantWaterByTerm = ref({})
 const suppressResourceRewards = ref(false)
 
 // ==========================================
-// 3. 宠物交互控制 (带跨日持久化的微型状态机)
+// 3. 宠物交互控制 (引入序列帧与周期性动画)
 // ==========================================
-// 可选状态: 'idle' | 'eating' | 'happy' | 'refused' | 'playing'
-const catState = ref('idle')
-let catStateTimer = null
+// 可选状态: 'sleep' | 'play' | 'eating' | 'happy' | 'refused' | 'stretching' | 'jumping' | 'lifted'
+const catState = ref('sleep')
 
-// 新增：动态加载图片资源映射
+function createSequentialFrames(folderName, filePrefix, frameCount, padLength) {
+  return Array.from({ length: frameCount }, (_, index) => {
+    const suffix = String(index + 1).padStart(padLength, '0')
+    return new URL(`./assets/Cat/${folderName}/${filePrefix}_${suffix}.png`, import.meta.url).href
+  })
+}
+
+// --- 帧动画资产引入 ---
+const sleepFrames = createSequentialFrames('cat_sleep', 'cat_sleep', 4, 1)
+const playFrames = createSequentialFrames('cat_play', 'play', 10, 2)
+const stretchFrames = createSequentialFrames('cat_stretch', 'stretch', 10, 2)
+const jumpFrames = createSequentialFrames('cat_jump', 'cat_jump', 8, 1)
+const walkFrames = createSequentialFrames('cat_walk', 'walk', 10, 2)
+
 const catImages = {
-  idle: new URL('./assets/Cat/cat_sleep.png', import.meta.url).href,
   eating: new URL('./assets/Cat/cat_eat.png', import.meta.url).href,
   happy: new URL('./assets/Cat/cat_happy.png', import.meta.url).href,
   refused: new URL('./assets/Cat/cat_sad.png', import.meta.url).href,
-  playing: new URL('./assets/Cat/cat_watching.png', import.meta.url).href // 玩球时使用专注看球的状态
+  lifted: new URL('./assets/Cat/cat_lifted.png', import.meta.url).href 
 }
 
-// 新增：根据状态动态计算当前的猫咪图片
+// 动画播放下标
+const currentSleepFrame = ref(0)
+const currentPlayFrame = ref(0)
+const currentStretchFrame = ref(0)
+const currentJumpFrame = ref(0)
+const currentWalkFrame = ref(0)
+
+const CAT_MESSAGES = {
+  sleep: '🐱 睡觉中...',
+  play: '😺 充满活力，玩耍中！',
+  eating: '😺 吧唧吧唧...猫粮真香！(经验+10)',
+  happy: '❤️ 呼噜呼噜...最喜欢你了！',
+  refused: '😿 喵...肚子饿，可是猫粮不足 10 份！',
+  lifted: '哇！起飞啦~',
+  landed: '稳稳落地！继续玩耍~',
+  watering: '🌱 咕噜咕噜...水好甜！'
+}
+
+const BASE_CAT_STATES = new Set(['sleep', 'play'])
+
+const actionStates = new Set(['eating', 'happy', 'refused', 'stretching', 'jumping', 'lifted'])
+
+function getBaseCatState() {
+  return lastFedDate.value === getTodayString() ? 'play' : 'sleep'
+}
+
+function clearCatStateTimer() {
+  if (!catStateTimer) return
+  clearTimeout(catStateTimer)
+  catStateTimer = null
+}
+
+function clearActionInterval() {
+  if (!actionInterval) return
+  clearInterval(actionInterval)
+  actionInterval = null
+}
+
+function setCatState(nextState, nextMessage) {
+  catState.value = nextState
+  if (typeof nextMessage === 'string') {
+    message.value = nextMessage
+  }
+}
+
+function restoreBaseCatState() {
+  const baseState = getBaseCatState()
+  setCatState(baseState, CAT_MESSAGES[baseState])
+  return baseState
+}
+
+function syncCatStateToBase() {
+  if (!actionStates.has(catState.value)) {
+    restoreBaseCatState()
+  }
+}
+
+// 动态计算当前的猫咪图片
 const currentCatImage = computed(() => {
-  return catImages[catState.value] || catImages.idle
+  if (catState.value === 'lifted') return catImages.lifted || sleepFrames[0]
+  if (isFloatingMode.value) return walkFrames[currentWalkFrame.value]
+  if (catState.value === 'sleep') return sleepFrames[currentSleepFrame.value]
+  if (catState.value === 'play') return playFrames[currentPlayFrame.value]
+  if (catState.value === 'stretching') return stretchFrames[currentStretchFrame.value]
+  if (catState.value === 'jumping') return jumpFrames[currentJumpFrame.value]
+  return catImages[catState.value] || sleepFrames[0]
 })
 
-// 获取今天日期的字符串格式，例如 "2026-5-7"
+// --- 定时器逻辑控制 ---
+let baseAnimationInterval = null
+let catStateTimer = null
+let periodicTimer = null
+let actionInterval = null 
+
+function startBaseAnimation() {
+  if (baseAnimationInterval) return
+  baseAnimationInterval = setInterval(() => {
+    if (isFloatingMode.value) {
+      if (catState.value !== 'lifted') {
+        currentWalkFrame.value = (currentWalkFrame.value + 1) % walkFrames.length
+      }
+      return
+    }
+
+    if (catState.value === 'sleep') {
+      currentSleepFrame.value = (currentSleepFrame.value + 1) % sleepFrames.length
+    } else if (catState.value === 'play') {
+      currentPlayFrame.value = (currentPlayFrame.value + 1) % playFrames.length
+    }
+  }, catState.value === 'play' ? 250 : 500)
+}
+
+function stopBaseAnimation() {
+  if (baseAnimationInterval) {
+    clearInterval(baseAnimationInterval)
+    baseAnimationInterval = null
+  }
+}
+
+watch(catState, (newState, oldState) => {
+  if (newState === oldState || !BASE_CAT_STATES.has(newState)) return
+
+  stopBaseAnimation()
+  startBaseAnimation()
+})
+
+// 触发伸懒腰动画
+function triggerStretch() {
+  setCatState('stretching')
+  currentStretchFrame.value = 0
+  let frame = 0
+  clearActionInterval()
+  actionInterval = setInterval(() => {
+    frame++
+    if (frame >= stretchFrames.length) {
+      clearActionInterval()
+      restoreBaseCatState() // 伸完懒腰回到当前基础状态
+    } else {
+      currentStretchFrame.value = frame
+    }
+  }, 300) // 每帧 300ms
+}
+
+// 触发跳跃动画
+function triggerJump() {
+  setCatState('jumping')
+  currentJumpFrame.value = 0
+  let frame = 0
+  clearActionInterval()
+  actionInterval = setInterval(() => {
+    frame++
+    if (frame >= jumpFrames.length) {
+      clearActionInterval()
+      restoreBaseCatState() // 跳跃完回到当前基础状态
+    } else {
+      currentJumpFrame.value = frame
+    }
+  }, 240) // 每帧 240ms
+}
+
+// 开启 10s 周期倒计时
+function startPeriodicTimer(actionType) {
+  stopPeriodicTimer()
+  periodicTimer = setInterval(() => {
+    if (actionType === 'stretch' && catState.value === 'sleep') {
+      triggerStretch()
+    } else if (actionType === 'jump' && catState.value === 'play' && !isFloatingMode.value) {
+      triggerJump()
+    }
+  }, 10000) // 每 10s 触发一次
+}
+
+function stopPeriodicTimer() {
+  if (periodicTimer) {
+    clearInterval(periodicTimer)
+    periodicTimer = null
+  }
+}
+
+// 获取今天日期的字符串格式
 function getTodayString() {
   const d = new Date()
   return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`
 }
 
-// 从本地缓存读取最后一次喂食的日期
 const lastFedDate = ref(localStorage.getItem('cs_valley_last_fed_date') || '')
 
-// 优化后的状态重置函数：记住先前的持久状态
+// 监听基础状态与悬浮窗模式，自动调度对应的底层动画和计时器
+watch([isFloatingMode, lastFedDate], () => {
+  syncCatStateToBase()
+  stopBaseAnimation()
+  stopPeriodicTimer()
+
+  startBaseAnimation()
+
+  if (isFloatingMode.value) {
+    return
+  }
+
+  if (catState.value === 'sleep') {
+    startPeriodicTimer('stretch')
+  } else if (catState.value === 'play') {
+    startPeriodicTimer('jump')
+  }
+}, { immediate: true })
+
 function resetCatState(delay = 2000) {
-  if (catStateTimer) clearTimeout(catStateTimer)
+  clearCatStateTimer()
   catStateTimer = setTimeout(() => {
-    // 检查今天是否已经喂过，如果是，恢复为玩球/专注状态
-    if (lastFedDate.value === getTodayString()) {
-      catState.value = 'playing'
-      message.value = '⚽ 充满活力，玩球中！'
-    } else {
-      catState.value = 'idle'
-      message.value = '🐱 睡觉中...'
-    }
+    restoreBaseCatState()
   }, delay)
 }
 
-
-
 function feedCat() {
   if (foodStock.value < 10) {
-    catState.value = 'refused'
-    message.value = '😿 喵...肚子饿，可是猫粮不足 10 份！'
+    setCatState('refused', CAT_MESSAGES.refused)
     resetCatState(2500)
     return
   }
 
-  // 结算资源
   catExp.value += 10
   feedCount.value++
   foodStock.value -= 10
   
-  catState.value = 'eating'
-  message.value = '😺 吧唧吧唧...猫粮真香！(经验+10)'
+  setCatState('eating', CAT_MESSAGES.eating)
 
-  // 吃完后进入“玩球”状态，并记录日期
-  if (catStateTimer) clearTimeout(catStateTimer)
+  clearCatStateTimer()
   catStateTimer = setTimeout(() => {
-    catState.value = 'playing'
-    message.value = '⚽ 充满活力，玩球中！'
-    
-    // 记录今天已经喂过了
+    restoreBaseCatState()
+
     const todayStr = getTodayString()
     lastFedDate.value = todayStr
     localStorage.setItem('cs_valley_last_fed_date', todayStr)
@@ -284,12 +451,26 @@ function feedCat() {
 }
 
 function interactWithCat() {
-  if (catState.value === 'eating') return // 吃饭时防打扰
+  if (catState.value === 'eating' || catState.value === 'lifted') return 
 
-  // 即使在玩球，也可以摸摸它，但摸完要继续玩球
-  catState.value = 'happy'
-  message.value = '❤️ 呼噜呼噜...最喜欢你了！'
+  setCatState('happy', CAT_MESSAGES.happy)
   resetCatState(2000)
+}
+
+// === 拖拽动作反馈逻辑 ===
+function handleDragStart() {
+  if (!isFloatingMode.value) return 
+  clearCatStateTimer()
+  
+  setCatState('lifted', CAT_MESSAGES.lifted)
+}
+
+function handleDragEnd() {
+  if (catState.value !== 'lifted') return 
+  
+  restoreBaseCatState()
+  message.value = CAT_MESSAGES.landed
+  resetCatState(2000) 
 }
 
 function waterPlant() {
@@ -311,8 +492,28 @@ function waterPlant() {
     }
   }
 
-  message.value = '🌱 咕噜咕噜...水好甜！'
+  message.value = CAT_MESSAGES.watering
   resetCatState(2000)
+}
+
+function resetToday() {
+  // 重置今日统计
+  feedCount.value = 0
+  waterCount.value = 0
+  todayPassed.value = 0
+  todayErrors.value = 0
+
+  // 清除喂食记录，让猫可以重新喂食
+  lastFedDate.value = ''
+  localStorage.removeItem('cs_valley_last_fed_date')
+
+  // 强制猫回到睡觉状态，清除所有定时器影响
+  clearCatStateTimer()
+  stopBaseAnimation()
+  stopPeriodicTimer()
+  clearActionInterval()
+
+  restoreBaseCatState()
 }
 
 // ==========================================
@@ -565,538 +766,96 @@ const reportCells = computed(() => {
 })
 
 const plantImageConfig = {
-  // 全局默认配置
   default: {
     width: '95px', left: '200px', bottom: '0px',
     transform: 'scale(5)', transformOrigin: 'bottom center'
   },
-
-  // ===================== 24节气 按顺序排列 =====================
-  // 春季节气
-  lichun: { // 立春
-    default: {
-      width: '100px',
-      left: '450px',
-      bottom: '160px',
-      transform: 'scale(3.5)',
-      transformOrigin: 'bottom center'
-    },
-    stage1: {
-      width: '100px',
-      left: '450px',
-      bottom: '160px',
-      transform: 'scale(2)',
-      transformOrigin: 'bottom center'
-    },
-    stage2: {
-      width: '100px',
-      left: '450px',
-      bottom: '160px',
-      transform: 'scale(3)',
-      transformOrigin: 'bottom center'
-    },
-    stage3: {},
-    stage4: {}
+  lichun: { 
+    default: { width: '100px', left: '450px', bottom: '160px', transform: 'scale(3.5)', transformOrigin: 'bottom center' },
+    stage1: { width: '100px', left: '450px', bottom: '160px', transform: 'scale(2)', transformOrigin: 'bottom center' },
+    stage2: { width: '100px', left: '450px', bottom: '160px', transform: 'scale(3)', transformOrigin: 'bottom center' },
+    stage3: {}, stage4: {}
   },
-  yushui: { // 雨水
-    default: {
-      width: '100px',
-      left: '450px',
-      bottom: '160px',
-      transform: 'scale(4)',
-      transformOrigin: 'bottom center'
-    },
-    stage1: {
-      bottom: '80px'
-    },
-    stage2: {
-      bottom: '170px'
-    },
-    stage3: {
-      bottom: '140px'
-    },
-    stage4: {}
+  yushui: { 
+    default: { width: '100px', left: '450px', bottom: '160px', transform: 'scale(4)', transformOrigin: 'bottom center' },
+    stage1: { bottom: '80px' }, stage2: { bottom: '170px' }, stage3: { bottom: '140px' }, stage4: {}
   },
-  jingzhe: { // 惊蛰
-    default: {
-      width: '100px',
-      left: '450px',
-      bottom: '180px',
-      transform: 'scale(4)',
-      transformOrigin: 'bottom center'
-    },
-    stage2: {
-      bottom: '120px'
-    },
-    stage1: {
-      width: '100px',
-      left: '450px',
-      bottom: '150px',
-      transform: 'scale(3)',
-      transformOrigin: 'bottom center'
-    },
-    stage3: {
-      bottom: '150px'
-    },
-    stage4: {}
+  jingzhe: { 
+    default: { width: '100px', left: '450px', bottom: '180px', transform: 'scale(4)', transformOrigin: 'bottom center' },
+    stage2: { bottom: '120px' },
+    stage1: { width: '100px', left: '450px', bottom: '150px', transform: 'scale(3)', transformOrigin: 'bottom center' },
+    stage3: { bottom: '150px' }, stage4: {}
   },
-  chunfen: { // 春分
-    default: {
-      width: '100px',
-      left: '450px',
-      bottom: '160px',
-      transform: 'scale(4)',
-      transformOrigin: 'bottom center'
-    },
-    stage1: {
-      width: '100px',
-      left: '450px',
-      bottom: '160px',
-      transform: 'scale(2)',
-      transformOrigin: 'bottom center'
-    },
-    stage2: {
-      transform: 'scale(3)'
-    },
-    stage3: {},
-    stage4: {}
+  chunfen: { 
+    default: { width: '100px', left: '450px', bottom: '160px', transform: 'scale(4)', transformOrigin: 'bottom center' },
+    stage1: { width: '100px', left: '450px', bottom: '160px', transform: 'scale(2)', transformOrigin: 'bottom center' },
+    stage2: { transform: 'scale(3)' }, stage3: {}, stage4: {}
   },
-  qingming: { // 清明
-    default: {
-      width: '100px',
-      left: '450px',
-      bottom: '160px',
-      transform: 'scale(3.5)',
-      transformOrigin: 'bottom center'
-    },
-    stage1: {},
-    stage2: {
-      bottom: '150px'
-    },
-    stage3: {},
-    stage4: {}
+  qingming: { 
+    default: { width: '100px', left: '450px', bottom: '160px', transform: 'scale(3.5)', transformOrigin: 'bottom center' },
+    stage1: {}, stage2: { bottom: '150px' }, stage3: {}, stage4: {}
   },
-  guyu: { // 谷雨
-    default: {
-      width: '100px',
-      left: '450px',
-      bottom: '160px',
-      transform: 'scale(4)',
-      transformOrigin: 'bottom center'
-    },
-    stage1: {
-      width: '100px',
-      left: '450px',
-      bottom: '100px',
-      transform: 'scale(4)',
-      transformOrigin: 'bottom center'
-    },
-    stage2: {
-      width: '100px',
-      left: '450px',
-      bottom: '160px',
-      transform: 'scale(4)',
-      transformOrigin: 'bottom center'
-    },
-    stage3: {
-      width: '100px',
-      left: '450px',
-      bottom: '120px',
-      transform: 'scale(4)',
-      transformOrigin: 'bottom center'
-    },
-    stage4: {
-      width: '100px',
-      left: '450px',
-      bottom: '160px',
-      transform: 'scale(3.5)',
-      transformOrigin: 'bottom center'
-    }
+  guyu: { 
+    default: { width: '100px', left: '450px', bottom: '160px', transform: 'scale(4)', transformOrigin: 'bottom center' },
+    stage1: { width: '100px', left: '450px', bottom: '100px', transform: 'scale(4)', transformOrigin: 'bottom center' },
+    stage2: { width: '100px', left: '450px', bottom: '160px', transform: 'scale(4)', transformOrigin: 'bottom center' },
+    stage3: { width: '100px', left: '450px', bottom: '120px', transform: 'scale(4)', transformOrigin: 'bottom center' },
+    stage4: { width: '100px', left: '450px', bottom: '160px', transform: 'scale(3.5)', transformOrigin: 'bottom center' }
   },
-
-  // 夏季节气
-  lixia: { // 立夏
-    default: {
-      width: '100px',
-      left: '450px',
-      bottom: '160px',
-      transform: 'scale(4)',
-      transformOrigin: 'bottom center'
-    },
-    stage1: {},
-    stage2: {},
-    stage3: {},
-    stage4: {}
+  lixia: { default: { width: '100px', left: '450px', bottom: '160px', transform: 'scale(4)', transformOrigin: 'bottom center' }, stage1: {}, stage2: {}, stage3: {}, stage4: {} },
+  xiaoman: { default: { width: '100px', left: '450px', bottom: '160px', transform: 'scale(4)', transformOrigin: 'bottom center' }, stage1: {}, stage2: {}, stage3: {}, stage4: {} },
+  mangzhong: { default: { width: '100px', left: '450px', bottom: '160px', transform: 'scale(4)', transformOrigin: 'bottom center' }, stage1: {}, stage2: {}, stage3: {}, stage4: {} },
+  xiazhi: { default: { width: '100px', left: '450px', bottom: '160px', transform: 'scale(5.5)', transformOrigin: 'bottom center' }, stage1: {}, stage2: {}, stage3: {}, stage4: {} },
+  xiaoshu: { default: { width: '100px', left: '450px', bottom: '160px', transform: 'scale(4)', transformOrigin: 'bottom center' }, stage1: {}, stage2: {}, stage3: {}, stage4: {} },
+  dashu: { default: { width: '100px', left: '450px', bottom: '160px', transform: 'scale(4)', transformOrigin: 'bottom center' }, stage1: {}, stage2: {}, stage3: {}, stage4: {} },
+  liqiu: { 
+    default: { width: '100px', left: '450px', bottom: '160px', transform: 'scale(4)', transformOrigin: 'bottom center' },
+    stage1: { width: '100px', left: '450px', bottom: '170px', transform: 'scale(2)', transformOrigin: 'bottom center' },
+    stage2: { width: '100px', left: '450px', bottom: '160px', transform: 'scale(2.5)', transformOrigin: 'bottom center' },
+    stage3: { width: '100px', left: '450px', bottom: '160px', transform: 'scale(3)', transformOrigin: 'bottom center' },
+    stage4: { width: '100px', left: '450px', bottom: '160px', transform: 'scale(3.5)', transformOrigin: 'bottom center' }
   },
-  xiaoman: { // 小满
-    default: {
-      width: '100px',
-      left: '450px',
-      bottom: '160px',
-      transform: 'scale(4)',
-      transformOrigin: 'bottom center'
-    },
-    stage1: {},
-    stage2: {},
-    stage3: {},
-    stage4: {}
+  chushu: { 
+    default: { width: '100px', left: '450px', bottom: '160px', transform: 'scale(4)', transformOrigin: 'bottom center' },
+    stage1: { width: '100px', left: '450px', bottom: '170px', transform: 'scale(1.5)', transformOrigin: 'bottom center' },
+    stage2: { width: '100px', left: '450px', bottom: '160px', transform: 'scale(2.5)', transformOrigin: 'bottom center' },
+    stage3: { width: '100px', left: '450px', bottom: '160px', transform: 'scale(2.5)', transformOrigin: 'bottom center' },
+    stage4: { width: '100px', left: '450px', bottom: '160px', transform: 'scale(2.8)', transformOrigin: 'bottom center' }
   },
-  mangzhong: { // 芒种
-    default: {
-      width: '100px',
-      left: '450px',
-      bottom: '160px',
-      transform: 'scale(4)',
-      transformOrigin: 'bottom center'
-    },
-    stage1: {},
-    stage2: {},
-    stage3: {},
-    stage4: {}
+  bailu: { 
+    default: { width: '100px', left: '450px', bottom: '160px', transform: 'scale(4)', transformOrigin: 'bottom center' },
+    stage1: { width: '100px', left: '450px', bottom: '170px', transform: 'scale(1.5)', transformOrigin: 'bottom center' },
+    stage2: { width: '100px', left: '450px', bottom: '160px', transform: 'scale(2)', transformOrigin: 'bottom center' },
+    stage3: { width: '100px', left: '450px', bottom: '160px', transform: 'scale(2.5)', transformOrigin: 'bottom center' },
+    stage4: { width: '100px', left: '450px', bottom: '160px', transform: 'scale(2.5)', transformOrigin: 'bottom center' }
   },
-  xiazhi: { // 夏至
-    default: {
-      width: '100px',
-      left: '450px',
-      bottom: '160px',
-      transform: 'scale(5.5)',
-      transformOrigin: 'bottom center'
-    },
-    stage1: {},
-    stage2: {},
-    stage3: {},
-    stage4: {}
+  qiufen: { 
+    default: { width: '100px', left: '450px', bottom: '160px', transform: 'scale(4)', transformOrigin: 'bottom center' },
+    stage1: { width: '100px', left: '450px', bottom: '170px', transform: 'scale(1.5)', transformOrigin: 'bottom center' },
+    stage2: { width: '100px', left: '450px', bottom: '160px', transform: 'scale(1.8)', transformOrigin: 'bottom center' },
+    stage3: { width: '100px', left: '450px', bottom: '160px', transform: 'scale(2.2)', transformOrigin: 'bottom center' },
+    stage4: { width: '100px', left: '450px', bottom: '160px', transform: 'scale(2)', transformOrigin: 'bottom center' }
   },
-  xiaoshu: { // 小暑
-    default: {
-      width: '100px',
-      left: '450px',
-      bottom: '160px',
-      transform: 'scale(4)',
-      transformOrigin: 'bottom center'
-    },
-    stage1: {},
-    stage2: {},
-    stage3: {},
-    stage4: {}
+  hanlu: { 
+    default: { width: '100px', left: '450px', bottom: '160px', transform: 'scale(4)', transformOrigin: 'bottom center' },
+    stage1: { width: '100px', left: '450px', bottom: '170px', transform: 'scale(2)', transformOrigin: 'bottom center' },
+    stage2: { width: '100px', left: '450px', bottom: '160px', transform: 'scale(3)', transformOrigin: 'bottom center' },
+    stage3: { width: '100px', left: '450px', bottom: '160px', transform: 'scale(3)', transformOrigin: 'bottom center' },
+    stage4: { width: '100px', left: '450px', bottom: '160px', transform: 'scale(3.5)', transformOrigin: 'bottom center' }
   },
-  dashu: { // 大暑
-    default: {
-      width: '100px',
-      left: '450px',
-      bottom: '160px',
-      transform: 'scale(4)',
-      transformOrigin: 'bottom center'
-    },
-    stage1: {},
-    stage2: {},
-    stage3: {},
-    stage4: {}
+  shuangjiang: { 
+    default: { width: '100px', left: '450px', bottom: '160px', transform: 'scale(4)', transformOrigin: 'bottom center' },
+    stage1: { width: '100px', left: '450px', bottom: '160px', transform: 'scale(2)', transformOrigin: 'bottom center' },
+    stage2: { width: '100px', left: '450px', bottom: '160px', transform: 'scale(2)', transformOrigin: 'bottom center' },
+    stage3: { width: '100px', left: '450px', bottom: '160px', transform: 'scale(2.5)', transformOrigin: 'bottom center' },
+    stage4: { width: '100px', left: '450px', bottom: '160px', transform: 'scale(2)', transformOrigin: 'bottom center' }
   },
-
-  // 秋季节气
-  liqiu: { // 立秋
-    default: {
-      width: '100px',
-      left: '450px',
-      bottom: '160px',
-      transform: 'scale(4)',
-      transformOrigin: 'bottom center'
-    },
-    stage1: {
-      width: '100px',
-      left: '450px',
-      bottom: '170px',
-      transform: 'scale(2)',
-      transformOrigin: 'bottom center'
-    },
-    stage2: {
-      width: '100px',
-      left: '450px',
-      bottom: '160px',
-      transform: 'scale(2.5)',
-      transformOrigin: 'bottom center'
-    },
-    stage3: {
-      width: '100px',
-      left: '450px',
-      bottom: '160px',
-      transform: 'scale(3)',
-      transformOrigin: 'bottom center'
-    },
-    stage4: {
-      width: '100px',
-      left: '450px',
-      bottom: '160px',
-      transform: 'scale(3.5)',
-      transformOrigin: 'bottom center'
-    }
-  },
-  chushu: { // 处暑
-    default: {
-      width: '100px',
-      left: '450px',
-      bottom: '160px',
-      transform: 'scale(4)',
-      transformOrigin: 'bottom center'
-    },
-    stage1: {
-      width: '100px',
-      left: '450px',
-      bottom: '170px',
-      transform: 'scale(1.5)',
-      transformOrigin: 'bottom center'
-    },
-    stage2: {
-      width: '100px',
-      left: '450px',
-      bottom: '160px',
-      transform: 'scale(2.5)',
-      transformOrigin: 'bottom center'
-    },
-    stage3: {
-      width: '100px',
-      left: '450px',
-      bottom: '160px',
-      transform: 'scale(2.5)',
-      transformOrigin: 'bottom center'
-    },
-    stage4: {
-      width: '100px',
-      left: '450px',
-      bottom: '160px',
-      transform: 'scale(2.8)',
-      transformOrigin: 'bottom center'
-    }
-  },
-  bailu: { // 白露
-    default: {
-      width: '100px',
-      left: '450px',
-      bottom: '160px',
-      transform: 'scale(4)',
-      transformOrigin: 'bottom center'
-    },
-    stage1: {
-      width: '100px',
-      left: '450px',
-      bottom: '170px',
-      transform: 'scale(1.5)',
-      transformOrigin: 'bottom center'
-    },
-    stage2: {
-      width: '100px',
-      left: '450px',
-      bottom: '160px',
-      transform: 'scale(2)',
-      transformOrigin: 'bottom center'
-    },
-    stage3: {
-      width: '100px',
-      left: '450px',
-      bottom: '160px',
-      transform: 'scale(2.5)',
-      transformOrigin: 'bottom center'
-    },
-    stage4: {
-      width: '100px',
-      left: '450px',
-      bottom: '160px',
-      transform: 'scale(2.5)',
-      transformOrigin: 'bottom center'
-    }
-  },
-  qiufen: { // 秋分
-    default: {
-      width: '100px',
-      left: '450px',
-      bottom: '160px',
-      transform: 'scale(4)',
-      transformOrigin: 'bottom center'
-    },
-    stage1: {
-      width: '100px',
-      left: '450px',
-      bottom: '170px',
-      transform: 'scale(1.5)',
-      transformOrigin: 'bottom center'
-    },
-    stage2: {
-      width: '100px',
-      left: '450px',
-      bottom: '160px',
-      transform: 'scale(1.8)',
-      transformOrigin: 'bottom center'
-    },
-    stage3: {
-      width: '100px',
-      left: '450px',
-      bottom: '160px',
-      transform: 'scale(2.2)',
-      transformOrigin: 'bottom center'
-    },
-    stage4: {
-      width: '100px',
-      left: '450px',
-      bottom: '160px',
-      transform: 'scale(2)',
-      transformOrigin: 'bottom center'
-    }
-  },
-  hanlu: { // 寒露
-    default: {
-      width: '100px',
-      left: '450px',
-      bottom: '160px',
-      transform: 'scale(4)',
-      transformOrigin: 'bottom center'
-    },
-    stage1: {
-      width: '100px',
-      left: '450px',
-      bottom: '170px',
-      transform: 'scale(2)',
-      transformOrigin: 'bottom center'
-    },
-    stage2: {
-      width: '100px',
-      left: '450px',
-      bottom: '160px',
-      transform: 'scale(3)',
-      transformOrigin: 'bottom center'
-    },
-    stage3: {
-      width: '100px',
-      left: '450px',
-      bottom: '160px',
-      transform: 'scale(3)',
-      transformOrigin: 'bottom center'
-    },
-    stage4: {
-      width: '100px',
-      left: '450px',
-      bottom: '160px',
-      transform: 'scale(3.5)',
-      transformOrigin: 'bottom center'
-    }
-  },
-  shuangjiang: { // 霜降
-    default: {
-      width: '100px',
-      left: '450px',
-      bottom: '160px',
-      transform: 'scale(4)',
-      transformOrigin: 'bottom center'
-    },
-    stage1: {
-      width: '100px',
-      left: '450px',
-      bottom: '160px',
-      transform: 'scale(2)',
-      transformOrigin: 'bottom center'
-    },
-    stage2: {
-      width: '100px',
-      left: '450px',
-      bottom: '160px',
-      transform: 'scale(2)',
-      transformOrigin: 'bottom center'
-    },
-    stage3: {
-      width: '100px',
-      left: '450px',
-      bottom: '160px',
-      transform: 'scale(2.5)',
-      transformOrigin: 'bottom center'
-    },
-    stage4: {
-      width: '100px',
-      left: '450px',
-      bottom: '160px',
-      transform: 'scale(2)',
-      transformOrigin: 'bottom center'
-    }
-  },
-
-  // 冬季节气
-  lidong: { // 立冬
-    default: {
-      width: '50px',
-      left: '450px',
-      bottom: '120px',
-      transform: 'scale(4)',
-      transformOrigin: 'bottom center'
-    },
-    stage1: {},
-    stage2: {},
-    stage3: {},
-    stage4: {}
-  },
-  xiaoxue: { // 小雪
-    default: {
-      width: '50px',
-      left: '450px',
-      bottom: '130px',
-      transform: 'scale(4)',
-      transformOrigin: 'bottom center'
-    },
-    stage1: {},
-    stage2: {},
-    stage3: {},
-    stage4: {}
-  },
-  daxue: { // 大雪
-    default: {
-      width: '60px',
-      left: '450px',
-      bottom: '110px',
-      transform: 'scale(4)',
-      transformOrigin: 'bottom center'
-    },
-    stage1: {},
-    stage2: {},
-    stage3: {},
-    stage4: {}
-  },
-  dongzhi: { // 冬至
-    default: {
-      width: '80px',
-      left: '450px',
-      bottom: '160px',
-      transform: 'scale(4)',
-      transformOrigin: 'bottom center'
-    },
-    stage1: {},
-    stage2: {},
-    stage3: {},
-    stage4: {}
-  },
-  xiaohan: { // 小寒
-    default: {
-      width: '60px',
-      left: '450px',
-      bottom: '130px',
-      transform: 'scale(4)',
-      transformOrigin: 'bottom center'
-    },
-    stage1: {},
-    stage2: {},
-    stage3: {},
-    stage4: {}
-  },
-  dahan: { // 大寒
-    default: {
-      width: '60px',
-      left: '455px',
-      bottom: '140px',
-      transform: 'scale(4)',
-      transformOrigin: 'bottom center'
-    },
-    stage1: {},
-    stage2: {},
-    stage3: {},
-    stage4: {}
-  }
+  lidong: { default: { width: '50px', left: '450px', bottom: '120px', transform: 'scale(4)', transformOrigin: 'bottom center' }, stage1: {}, stage2: {}, stage3: {}, stage4: {} },
+  xiaoxue: { default: { width: '50px', left: '450px', bottom: '130px', transform: 'scale(4)', transformOrigin: 'bottom center' }, stage1: {}, stage2: {}, stage3: {}, stage4: {} },
+  daxue: { default: { width: '60px', left: '450px', bottom: '110px', transform: 'scale(4)', transformOrigin: 'bottom center' }, stage1: {}, stage2: {}, stage3: {}, stage4: {} },
+  dongzhi: { default: { width: '80px', left: '450px', bottom: '160px', transform: 'scale(4)', transformOrigin: 'bottom center' }, stage1: {}, stage2: {}, stage3: {}, stage4: {} },
+  xiaohan: { default: { width: '60px', left: '450px', bottom: '130px', transform: 'scale(4)', transformOrigin: 'bottom center' }, stage1: {}, stage2: {}, stage3: {}, stage4: {} },
+  dahan: { default: { width: '60px', left: '455px', bottom: '140px', transform: 'scale(4)', transformOrigin: 'bottom center' }, stage1: {}, stage2: {}, stage3: {}, stage4: {} }
 };
 
 function getPlantImageUrl(termKey, stage) {
@@ -1395,13 +1154,7 @@ onMounted(() => {
   window.addEventListener('resize', updateUiScale)
 
   // 初始化时校验跨日状态
-  if (lastFedDate.value === getTodayString()) {
-    catState.value = 'playing'
-    message.value = '⚽ 充满活力，玩球中！'
-  } else {
-    catState.value = 'idle'
-    message.value = '🐱 睡觉中...'
-  }
+  restoreBaseCatState()
 
   timerId = setInterval(() => {
     now.value = new Date()
@@ -1412,9 +1165,8 @@ onMounted(() => {
       lastFedDate.value = ''
       localStorage.removeItem('cs_valley_last_fed_date') 
       
-      if (catState.value === 'playing') {
-        catState.value = 'idle'
-        message.value = '🐱 昨天玩累了，睡觉中...'
+      if (catState.value === 'play') {
+        setCatState('sleep', '🐱 昨天玩累了，睡觉中...')
       }
     }
   }, 60000)
@@ -1427,6 +1179,10 @@ onUnmounted(() => {
     offActivityUpdate = null
   }
   if (timerId) clearInterval(timerId)
+  
+  stopBaseAnimation()
+  stopPeriodicTimer()
+  clearActionInterval()
 })
 
 onBeforeUnmount(() => {
@@ -1502,20 +1258,24 @@ onBeforeUnmount(() => {
         <div class="bubble" :style="{ top: bubbleTop }" @dblclick.stop="handleRestore">{{ message }}</div>
         
         <div class="characters">
-          <div v-if="catState === 'playing'" class="toy-ball"></div>
-
           <img
             class="cat-image"
             :class="{
-              'cat-idle': catState === 'idle',
+              'cat-idle': catState === 'sleep',
               'cat-eating': catState === 'eating',
               'cat-happy': catState === 'happy',
               'cat-refused': catState === 'refused',
-              'cat-playing': catState === 'playing'
+              'cat-playing': catState === 'play',
+              'cat-stretching': catState === 'stretching',
+              'cat-jumping': catState === 'jumping',
+              'cat-lifted': catState === 'lifted'
             }"
             :src="currentCatImage"
             draggable="false"
             @click="interactWithCat"
+            @mousedown="handleDragStart"
+            @mouseup="handleDragEnd"
+            @mouseleave="handleDragEnd"
             :style="isFloatingMode ? '-webkit-app-region: drag; pointer-events: auto;' : ''"
           />
 
@@ -1535,6 +1295,7 @@ onBeforeUnmount(() => {
         <button class="image-btn image-btn-settings" @click="openSettings" aria-label="设置"><img src="./assets/btn-settings.png" draggable="false"></button>
         <button class="image-btn image-btn-weekly-report" :class="{ glowing: hasNewReport }" @click="openWeeklyReport" aria-label="节气周报"><img src="./assets/btn-weekly-report.png" draggable="false"></button>
         <button class="image-btn" @click="openTimeMachine" aria-label="沙盘模式"><img src="./assets/btn_shapanmode.png" draggable="false"></button>
+        <button class="image-btn" @click="resetToday" aria-label="重置今日"><img src="./assets/btn-reset.png" draggable="false"></button>
       </div>
 
       <div
@@ -1973,11 +1734,37 @@ onBeforeUnmount(() => {
   left: -15px;
   bottom: 75px;
   width: 250px;
+  height: 250px;
+  display: block;
+  object-fit: contain;
+  object-position: center bottom;
   filter: drop-shadow(0px 10px 10px rgba(0,0,0,0.5));
   transition: transform 0.2s;
   transform-origin: bottom center;
-  cursor: pointer; 
+  cursor: grab;
   will-change: transform; 
+}
+
+.cat-idle,
+.cat-stretching,
+.cat-jumping {
+  position: absolute;
+  left: 25px;
+  bottom: 35px;
+  width: 170px;
+  height: 170px;
+  display: block;
+  object-fit: contain;
+  object-position: center bottom;
+  filter: drop-shadow(0px 10px 10px rgba(0,0,0,0.5));
+  transition: transform 0.2s;
+  transform-origin: bottom center;
+  cursor: grab;
+  will-change: transform; 
+}
+
+.cat-image:active {
+  cursor: grabbing;
 }
 
 .cat-idle:hover {
@@ -2613,21 +2400,6 @@ onBeforeUnmount(() => {
    宠物交互道具与专属联动动画（优化结合实体图片）
    ========================================== */
 
-/* --- 道具：玩具球 --- */
-/* 因为你有了专注看球(cat_watching.png)的状态，我们保留跳动的球，使其组合起来像玩球动作 */
-.toy-ball {
-  position: absolute;
-  left: -30px;
-  bottom: 80px;
-  width: 48px;
-  height: 48px;
-  background: radial-gradient(circle at 30% 30%, #ff6b6b, #c92a2a); 
-  border-radius: 50%;
-  box-shadow: 0 5px 5px rgba(0,0,0,0.4);
-  z-index: 2;
-  animation: ballRollBounce 1.5s linear infinite;
-}
-
 @keyframes galleryButtonGlow {
   0%, 100% {
     filter: drop-shadow(0 0 8px rgba(255, 211, 76, 0.85));
@@ -2654,16 +2426,7 @@ onBeforeUnmount(() => {
   }
 }
 
-@keyframes ballRollBounce {
-  0%   { transform: translateX(0) translateY(0) rotate(0deg); }
-  20%  { transform: translateX(20px) translateY(-15px) rotate(90deg); } 
-  40%  { transform: translateX(40px) translateY(0) rotate(180deg); } 
-  60%  { transform: translateX(60px) translateY(-10px) rotate(270deg); } 
-  80%  { transform: translateX(70px) translateY(0) rotate(360deg); } 
-  100% { transform: translateX(0) translateY(0) rotate(0deg); } 
-}
-
-/* 1. 待机呼吸感 (配合 cat_sleep.png) */
+/* 1. 待机呼吸感 (配合循环睡眠动画) */
 .cat-idle {
   animation: breathe 3s ease-in-out infinite;
 }
@@ -2672,7 +2435,7 @@ onBeforeUnmount(() => {
   50% { transform: scale(1.02) translateY(-3px); }
 }
 
-/* 2. 进食动作 (配合 cat_eat.png，只需轻微点头) */
+/* 2. 进食动作 (只需轻微点头) */
 .cat-eating {
   animation: eatingAction 0.6s ease-in-out infinite;
 }
@@ -2681,7 +2444,7 @@ onBeforeUnmount(() => {
   50% { transform: scale(1.01) translateY(3px) rotate(1deg); } 
 }
 
-/* 3. 开心撒娇 (配合 cat_happy.png) */
+/* 3. 开心撒娇 */
 .cat-happy {
   animation: happyBounce 0.8s ease-in-out infinite;
 }
@@ -2693,7 +2456,7 @@ onBeforeUnmount(() => {
   100% { transform: scale(1) translateY(0); }
 }
 
-/* 4. 委屈拒绝 (配合 cat_sad.png) */
+/* 4. 委屈拒绝 */
 .cat-refused {
   animation: shakeHead 0.5s ease-in-out;
 }
@@ -2703,19 +2466,14 @@ onBeforeUnmount(() => {
   75% { transform: translateX(4px) rotate(1deg); }
 }
 
-/* 5. 持续玩球状态 (配合 cat_watching.png 与玩具球联动) */
-.cat-playing {
-  animation: catPlayAction 1.5s linear infinite;
+/* 5. 拖拽悬空 */
+.cat-lifted {
+  animation: dangle 0.6s ease-in-out infinite alternate;
+  transform-origin: top center;
 }
-/* 调整为更轻微的追随动作，因为 watching 图片本身是静态专注的 */
-@keyframes catPlayAction {
-  0%   { transform: translateX(0) scaleX(1); } 
-  35%  { transform: translateX(10px) scaleX(1); } 
-  40%  { transform: translateX(20px) scaleX(1) translateY(-4px); } 
-  60%  { transform: translateX(30px) scaleX(1); } 
-  65%  { transform: translateX(30px) scaleX(1); } /* 保持原向专注看球 */
-  95%  { transform: translateX(0) scaleX(1) translateY(-2px); } 
-  100% { transform: translateX(0) scaleX(1); } 
+@keyframes dangle {
+  from { transform: rotate(-8deg) translateY(-10px); }
+  to { transform: rotate(8deg) translateY(-10px); }
 }
 </style>
 
