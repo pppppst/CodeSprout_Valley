@@ -516,9 +516,9 @@ const currentBgUrl = computed(() => {
 })
 
 function getPlantStageByWaterings(waterings) {
-  if (waterings >= 120) return 4 // 120
-  if (waterings >= 60) return 3 // 60
-  if (waterings >= 30) return 2 // 30
+  if (waterings >= 4) return 4 // 120
+  if (waterings >= 3) return 3 // 60
+  if (waterings >= 2) return 2 // 30
   return 1
 }
 
