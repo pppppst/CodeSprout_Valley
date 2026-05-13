@@ -21,6 +21,20 @@ let latestPluginActivity = {
   timestamp: 0
 }
 
+ipcMain.on('move-floating-window', (event, { x, y }) => {
+  if (floatingWindow && !floatingWindow.isDestroyed()) {
+    floatingWindow.setPosition(Math.round(x), Math.round(y))
+  }
+})
+
+ipcMain.handle('get-window-position', () => {
+  if (floatingWindow && !floatingWindow.isDestroyed()) {
+    const [x, y] = floatingWindow.getPosition()
+    return { x, y }
+  }
+  return { x: 0, y: 0 }
+})
+
 function broadcastPluginActivity(payload) {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('activity:update', payload)
@@ -156,6 +170,22 @@ function createFloatingWindow() {
       sandbox: false
     }
   })
+
+  const floatMenu = Menu.buildFromTemplate([
+    { label: '返回主界面', click: () => restoreMainInterface() },
+    { label: '猫咪换动作', click: () => {
+        if (floatingWindow && !floatingWindow.isDestroyed()) {
+          floatingWindow.webContents.send('change-cat-action')
+        }
+      }
+    }
+  ])
+
+  floatingWindow.webContents.on('context-menu', (event) => {
+    event.preventDefault()
+    floatMenu.popup()
+  })
+
 
   // 通过 Hash 路由 #floating 告诉前端只渲染宠物组件
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {

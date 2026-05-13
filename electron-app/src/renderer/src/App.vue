@@ -196,6 +196,13 @@ const todayErrors = ref(0)
 let offActivityUpdate = null
 const isStatsVisible = ref(true)
 
+// 模拟拖拽窗口相关变量
+let isWindowDragging = false
+let dragStartScreenX = 0
+let dragStartScreenY = 0
+let currentWindowX = 0
+let currentWindowY = 0
+
 const CODE_LINES_PER_REWARD = 50
 const RESOURCE_PER_REWARD = 20
 const WATER_COST = 20
@@ -470,6 +477,50 @@ function handleDragEnd() {
   message.value = CAT_MESSAGES.landed
   resetCatState(2000) 
 }
+
+// 猫的拖拽移动窗口（仅悬浮窗模式）
+async function onCatMouseDown(e) {
+  if (!isFloatingMode.value) return
+  if (e.button !== 0) return  // 仅左键拖拽
+  e.preventDefault()
+
+  // 触发原有的拎起动画
+  handleDragStart()
+
+  // 获取当前窗口位置
+  try {
+    const pos = await window.electron?.ipcRenderer?.invoke('get-window-position')
+    if (pos) {
+      currentWindowX = pos.x
+      currentWindowY = pos.y
+    }
+  } catch (err) {
+    console.warn('获取窗口位置失败', err)
+    currentWindowX = 0
+    currentWindowY = 0
+  }
+
+  isWindowDragging = true
+  dragStartScreenX = e.screenX
+  dragStartScreenY = e.screenY
+}
+
+function onCatMouseMove(e) {
+  if (!isWindowDragging) return
+  const deltaX = e.screenX - dragStartScreenX
+  const deltaY = e.screenY - dragStartScreenY
+  const newX = currentWindowX + deltaX
+  const newY = currentWindowY + deltaY
+  window.electron?.ipcRenderer?.send('move-floating-window', { x: newX, y: newY })
+}
+
+function onCatMouseUp(e) {
+  if (!isWindowDragging) return
+  isWindowDragging = false
+  // 触发原有的落地动画
+  handleDragEnd()
+}
+
 
 function waterPlant() {
   if (waterStock.value < WATER_COST) {
@@ -1147,6 +1198,9 @@ onMounted(() => {
     window.api.getLatestActivity().then(applyActivityUpdate).catch(err => console.error('[CS Valley]', err))
   }
 
+  window.addEventListener('mousemove', onCatMouseMove)
+  window.addEventListener('mouseup', onCatMouseUp)
+
   if (cloudToken.value) {
     loadCloudSave()
       .then(() => {
@@ -1187,7 +1241,8 @@ onUnmounted(() => {
     offActivityUpdate = null
   }
   if (timerId) clearInterval(timerId)
-  
+  window.removeEventListener('mousemove', onCatMouseMove)
+  window.removeEventListener('mouseup', onCatMouseUp)
   stopBaseAnimation()
   stopPeriodicTimer()
   clearActionInterval()
@@ -1263,7 +1318,7 @@ onBeforeUnmount(() => {
       </div>
 
       <div class="pet-area" style="-webkit-app-region: no-drag;">
-        <div class="bubble" :style="{ top: bubbleTop }" @dblclick.stop="handleRestore">{{ message }}</div>
+        <div v-if="!isFloatingMode" class="bubble" :style="{ top: bubbleTop }" @dblclick.stop="handleRestore">{{ message }}</div>
         
         <div class="characters">
           <img
@@ -1281,10 +1336,11 @@ onBeforeUnmount(() => {
             :src="currentCatImage"
             draggable="false"
             @click="interactWithCat"
-            @mousedown="handleDragStart"
-            @mouseup="handleDragEnd"
-            @mouseleave="handleDragEnd"
-            :style="isFloatingMode ? '-webkit-app-region: drag; pointer-events: auto;' : ''"
+            @mousedown="onCatMouseDown"
+            @mousemove="onCatMouseMove"
+            @mouseup="onCatMouseUp"
+            @mouseleave="onCatMouseUp"
+            :style="isFloatingMode ? 'pointer-events: auto;' : ''"
           />
 
           <img
@@ -1802,6 +1858,7 @@ onBeforeUnmount(() => {
   cursor: grab;
   will-change: transform; 
 }
+
 
 .cat-image:active {
   cursor: grabbing;
