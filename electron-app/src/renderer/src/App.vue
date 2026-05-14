@@ -669,6 +669,24 @@ const plantImageModules = import.meta.glob('./assets/*/stage*.png', {
   eager: true,
   import: 'default'
 })
+// 未解锁 / 已解锁 图标集合（按文件名匹配节气拼音）
+const lockedModules = import.meta.glob('./assets/未解锁/*.png', { eager: true, import: 'default' })
+const unlockedModules = import.meta.glob('./assets/已解锁/*.png', { eager: true, import: 'default' })
+
+function getArchiveCellImage(termKey, hasRecord) {
+  const modules = hasRecord ? unlockedModules : lockedModules
+  // 优先匹配包含 `/${termKey}.png` 的文件名（处理带序号前缀的文件）
+  for (const p in modules) {
+    if (p.includes(`/${termKey}.png`)) return modules[p]
+  }
+  // 兜底：尝试不带前缀的直接匹配
+  for (const p in modules) {
+    const name = p.split('/').pop()
+    if (name && name.includes(termKey)) return modules[p]
+  }
+  // 最后返回第一个图片（如果有）或空字符串
+  return Object.values(modules)[0] || ''
+}
 const harvestImages = {
   seedling: new URL('./assets/harvest/harvest-seedling.png', import.meta.url).href,
   mature: new URL('./assets/harvest/harvest-mature.png', import.meta.url).href,
@@ -1321,22 +1339,20 @@ onBeforeUnmount(() => {
           </div>
           <div class="archive-book-body">
             <div class="archive-left-page">
-              <div class="archive-tab-row" aria-hidden="true">
-                <span></span><span></span><span></span>
-              </div>
               <div class="archive-grid">
                 <button
                   v-for="cell in archiveCells"
                   :key="cell.key"
                   class="archive-cell"
-                  :class="{ recorded: cell.hasRecord, selected: cell.isSelected, sparkling: cell.isLatest && cell.hasRecord }"
+                  :class="{ selected: cell.isSelected }"
                   @click="selectArchiveTerm(cell.key)"
                 >
-                  <span class="archive-term">{{ cell.name }}</span>
-                  <span v-if="cell.hasRecord" class="archive-file-icon" aria-hidden="true">
-                    <span class="archive-file-corner"></span>
-                  </span>
-                  <span v-else class="archive-empty-mark" aria-hidden="true">◇</span>
+                  <img
+                    class="archive-cell-img"
+                    :src="getArchiveCellImage(cell.key, cell.hasRecord)"
+                    :alt="cell.name"
+                    draggable="false"
+                  />
                 </button>
               </div>
             </div>
@@ -1627,9 +1643,9 @@ onBeforeUnmount(() => {
   background-position: center;
   background-size: contain; 
   overflow: visible; 
-  width: 220px;   
+  width: 255px;   
   height: 140px;  
-  top: 10px;      
+  top: 12px;      
   left: 920px;    
   transform: none;
   box-shadow: none;
@@ -1876,8 +1892,11 @@ onBeforeUnmount(() => {
 }
 
 .archive-book-panel {
+  --archive-height: 80vh;
   position: relative;
-  width: 940px;
+  width: 1000px;
+  height: var(--archive-height);
+  max-height: 820px;
   padding: 18px 20px 20px;
   border: 3px solid #b2aca0;
   border-radius: 18px 32px 22px 18px;
@@ -1891,8 +1910,8 @@ onBeforeUnmount(() => {
 .archive-book-panel::before {
   content: "";
   position: absolute;
-  top: 58px;
-  bottom: 18px;
+  top: 10%;
+  bottom: 10%;
   left: 50%;
   width: 10px;
   border-radius: 999px;
@@ -1944,12 +1963,15 @@ onBeforeUnmount(() => {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 30px;
+  /* 让左右页区块填满剩余高度 */
+  height: calc(100% - 80px);
 }
 
 .archive-left-page,
 .archive-detail-page {
   position: relative;
-  min-height: 510px;
+  height: 100%;
+  min-height: 0;
   padding: 22px 20px;
   border: 1px solid rgba(154, 138, 112, 0.28);
   border-radius: 12px;
@@ -1959,92 +1981,78 @@ onBeforeUnmount(() => {
   box-shadow: inset 0 0 20px rgba(169, 143, 95, 0.12);
 }
 
-.archive-tab-row {
-  display: flex;
-  gap: 8px;
-  margin: 0 0 18px 18px;
-}
-
-.archive-tab-row span {
-  width: 42px;
-  height: 34px;
-  border: 2px solid rgba(169, 126, 58, 0.28);
-  border-radius: 50%;
-  background:
-    radial-gradient(circle, rgba(255, 226, 136, 0.76) 0 30%, transparent 32%),
-    rgba(246, 231, 191, 0.82);
-  box-shadow: 0 3px 0 rgba(153, 112, 59, 0.14);
-}
-
 .archive-grid {
   display: grid;
   grid-template-columns: repeat(6, 58px);
   grid-template-rows: repeat(4, 68px);
   justify-content: center;
-  gap: 7px;
+  gap: 25px 7px;
+  margin: 0;
+  align-content: center;
+}
+
+/* 保证左侧页内的格子在容器中垂直和水平居中 */
+.archive-left-page {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.archive-cell-img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+  pointer-events: none;
+}
+
+.archive-cell-img {
+  transition: transform 160ms cubic-bezier(.2,.9,.3,1), box-shadow 160ms ease;
+  transform-origin: center center;
 }
 
 .archive-cell {
   position: relative;
   overflow: hidden;
   display: flex;
-  flex-direction: column;
   align-items: center;
-  justify-content: flex-start;
-  gap: 3px;
+  justify-content: center;
+  gap: 0;
   min-width: 0;
-  padding: 5px 4px;
-  border: 2px solid rgba(139, 107, 67, 0.52);
-  border-radius: 4px;
-  background:
-    linear-gradient(135deg, rgba(255, 255, 255, 0.3), rgba(128, 86, 42, 0.1)),
-    repeating-linear-gradient(92deg, #d1a168 0, #d1a168 8px, #c18c55 9px, #e0b779 16px, #b77f4d 17px, #d5a568 24px);
-  box-shadow:
-    0 3px 5px rgba(103, 73, 42, 0.2),
-    inset 0 2px 0 rgba(255, 241, 201, 0.3),
-    inset 0 -4px 0 rgba(112, 75, 39, 0.18),
-    inset 0 0 9px rgba(82, 51, 24, 0.14);
-  color: #1f140b;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: inherit;
   cursor: pointer;
+  width: 68px;
+  height: 78px;
 }
 
-.archive-cell::before {
-  content: "";
-  position: absolute;
-  inset: 3px;
-  border-radius: 3px;
-  background:
-    radial-gradient(ellipse at 24% 36%, rgba(106, 65, 30, 0.12), transparent 30%),
-    radial-gradient(ellipse at 74% 62%, rgba(255, 235, 170, 0.16), transparent 34%);
-  pointer-events: none;
-}
+.archive-cell::before { display: none; }
 
 .archive-cell:hover {
-  filter: brightness(1.04);
-  transform: translateY(-1px);
+  transform: translateY(0);
 }
 
 .archive-cell.selected {
-  border-color: #dc9145;
-  background:
-    linear-gradient(135deg, rgba(255, 245, 195, 0.36), rgba(221, 143, 61, 0.18)),
-    repeating-linear-gradient(92deg, #e2b56f 0, #e2b56f 8px, #cf9656 9px, #edc77f 16px, #c4894d 17px, #e0ad66 24px);
-  box-shadow:
-    0 0 0 3px rgba(255, 207, 97, 0.42),
-    0 5px 10px rgba(121, 80, 38, 0.24),
-    inset 0 0 12px rgba(255, 229, 154, 0.38);
+  z-index: 3;
 }
 
-.archive-cell.sparkling {
-  animation: harvestCellGlow 1.2s ease-in-out infinite;
+/* 选中时放大图片并给出凸起投影感 */
+.archive-cell.selected .archive-cell-img {
+  transform: scale(1.08);
+  box-shadow: 0 10px 24px rgba(18, 24, 32, 0.28), inset 0 6px 12px rgba(255,255,255,0.12);
+  border-radius: 6px;
 }
 
 .archive-term {
   position: relative;
-  z-index: 1;
-  width: 100%;
-  overflow: hidden;
-  color: #191109;
+  /* 隐藏文字标签，使用图片作为唯一视觉元素 */
+  .archive-term { display: none !important; }
+
+  .archive-file-icon {
   font-family: KaiTi, STKaiti, "KaiTi_GB2312", serif;
   font-size: 12px;
   font-weight: 700;
@@ -2055,44 +2063,9 @@ onBeforeUnmount(() => {
   text-shadow: 0 1px 0 rgba(255, 232, 182, 0.34);
 }
 
-.archive-file-icon {
-  position: relative;
-  z-index: 1;
-  display: block;
-  width: 34px;
-  height: 38px;
-  margin-top: 2px;
-  border: 2px solid rgba(112, 80, 45, 0.32);
-  border-radius: 4px;
-  background:
-    repeating-linear-gradient(0deg, rgba(128, 86, 39, 0.1) 0, rgba(128, 86, 39, 0.1) 1px, transparent 1px, transparent 7px),
-    linear-gradient(135deg, #f8e5b6, #e3bd77);
-  box-shadow: 0 4px 5px rgba(95, 61, 28, 0.22);
-}
+/* 隐藏文字标签，使用图片作为唯一视觉元素 */
+.archive-term { display: none !important; }
 
-.archive-file-corner {
-  position: absolute;
-  top: -2px;
-  right: -2px;
-  width: 13px;
-  height: 13px;
-  border-left: 1px solid rgba(112, 80, 45, 0.28);
-  border-bottom: 1px solid rgba(112, 80, 45, 0.28);
-  border-radius: 0 3px 0 3px;
-  background: #f3d497;
-}
-
-.archive-empty-mark {
-  position: relative;
-  z-index: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 38px;
-  height: 38px;
-  color: rgba(105, 88, 62, 0.38);
-  font-size: 24px;
-  line-height: 1;
 }
 
 .archive-detail-page {
@@ -2172,7 +2145,7 @@ onBeforeUnmount(() => {
 }
 
 .archive-section h4 {
-  margin: 0 0 14px;
+  margin: 0 0 30px;
   color: #5c432b;
   font-family: "华文中宋", KaiTi, STKaiti, serif;
   font-size: 22px;
