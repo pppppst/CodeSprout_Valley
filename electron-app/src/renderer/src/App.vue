@@ -1,14 +1,10 @@
 ﻿<script setup>
-import { ref, computed, watch, onMounted, onUnmounted, onBeforeUnmount, nextTick } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { getActiveJieQi } from './utils/calendar'
 import { registerAccount, loginAccount, fetchCloudSave, syncCloudSave } from './utils/cloudApi'
 import WeatherEffect from './components/WeatherEffect.vue'
+import { useFloatingWindow } from './components/floatingWindow'
 import { SolarUtil } from 'lunar-javascript'
-
-// ==========================================
-// 1. 悬浮窗与基础环境配置
-// ==========================================
-const isFloatingMode = ref(false)
 
 const authUsername = ref('')
 const authPassword = ref('')
@@ -148,26 +144,6 @@ const bubbleTop = computed(() => {
   return isFloatingMode.value ? '60%' : '69%'
 })
 
-function checkHash() {
-  isFloatingMode.value = window.location.hash === '#floating'
-  if (isFloatingMode.value) {
-    document.documentElement.classList.add('floating')
-    document.body.classList.add('floating')
-  } else {
-    document.documentElement.classList.remove('floating')
-    document.body.classList.remove('floating')
-  }
-}
-
-function onHashChange() {
-  checkHash()
-}
-
-function handleRestore() {
-  if (window.api && typeof window.api.restoreMainUI === 'function') {
-    window.api.restoreMainUI()
-  }
-}
 
 const uiScale = ref(1)
 function updateUiScale() {
@@ -195,6 +171,7 @@ const todayPassed = ref(0)
 const todayErrors = ref(0)
 let offActivityUpdate = null
 const isStatsVisible = ref(true)
+
 
 const CODE_LINES_PER_REWARD = 50
 const RESOURCE_PER_REWARD = 20
@@ -269,6 +246,31 @@ function clearActionInterval() {
   clearInterval(actionInterval)
   actionInterval = null
 }
+// ==========================================
+// 1. 悬浮窗与基础环境配置
+// ==========================================
+const {
+  isFloatingMode,
+  checkHash,
+  handleRestore,
+  onCatMouseDown,
+  onCatMouseMove,
+  onCatMouseUp,
+  setupFloatingListeners,
+  teardownFloatingListeners
+} = useFloatingWindow({
+  setCatState,
+  restoreBaseCatState,
+  resetCatState,
+  stopBaseAnimation,
+  startBaseAnimation,
+  clearActionInterval,
+  clearCatStateTimer,
+  message,
+  CAT_MESSAGES
+})
+
+
 
 function setCatState(nextState, nextMessage) {
   catState.value = nextState
@@ -453,22 +455,6 @@ function interactWithCat() {
 
   setCatState('happy', CAT_MESSAGES.happy)
   resetCatState(2000)
-}
-
-// === 拖拽动作反馈逻辑 ===
-function handleDragStart() {
-  if (!isFloatingMode.value) return 
-  clearCatStateTimer()
-  
-  setCatState('lifted', CAT_MESSAGES.lifted)
-}
-
-function handleDragEnd() {
-  if (catState.value !== 'lifted') return 
-  
-  restoreBaseCatState()
-  message.value = CAT_MESSAGES.landed
-  resetCatState(2000) 
 }
 
 function waterPlant() {
@@ -670,8 +656,8 @@ const plantImageModules = import.meta.glob('./assets/*/stage*.png', {
   import: 'default'
 })
 // 未解锁 / 已解锁 图标集合（按文件名匹配节气拼音）
-const lockedModules = import.meta.glob('./assets/未解锁/*.png', { eager: true, import: 'default' })
-const unlockedModules = import.meta.glob('./assets/已解锁/*.png', { eager: true, import: 'default' })
+const lockedModules = import.meta.glob('./assets/locked/*.png', { eager: true, import: 'default' })
+const unlockedModules = import.meta.glob('./assets/unlocked/*.png', { eager: true, import: 'default' })
 
 function getArchiveCellImage(termKey, hasRecord) {
   const modules = hasRecord ? unlockedModules : lockedModules
@@ -1155,7 +1141,7 @@ function getTermPinyinForDate(date) {
 // ==========================================
 onMounted(() => {
   checkHash()
-  window.addEventListener('hashchange', onHashChange)
+  setupFloatingListeners()
 
   if (window.api?.onActivityUpdate) {
     offActivityUpdate = window.api.onActivityUpdate(applyActivityUpdate)
@@ -1205,15 +1191,12 @@ onUnmounted(() => {
     offActivityUpdate = null
   }
   if (timerId) clearInterval(timerId)
-  
+  teardownFloatingListeners()
   stopBaseAnimation()
   stopPeriodicTimer()
   clearActionInterval()
 })
 
-onBeforeUnmount(() => {
-  window.removeEventListener('hashchange', onHashChange)
-})
 </script>
 
 <template>
@@ -1245,7 +1228,7 @@ onBeforeUnmount(() => {
     <div 
       class="pet-container"
       :class="{ 'floating-mode': isFloatingMode }"
-      style="-webkit-app-region: drag;"
+
       :style="isFloatingMode ? {} : { transform: `translate(-50%, -50%) scale(${uiScale})` }"
     >
       <div
@@ -1281,7 +1264,7 @@ onBeforeUnmount(() => {
       </div>
 
       <div class="pet-area" style="-webkit-app-region: no-drag;">
-        <div class="bubble" :style="{ top: bubbleTop }" @dblclick.stop="handleRestore">{{ message }}</div>
+        <div v-if="!isFloatingMode" class="bubble" :style="{ top: bubbleTop }" @dblclick.stop="handleRestore">{{ message }}</div>
         
         <div class="characters">
           <img
@@ -1299,10 +1282,11 @@ onBeforeUnmount(() => {
             :src="currentCatImage"
             draggable="false"
             @click="interactWithCat"
-            @mousedown="handleDragStart"
-            @mouseup="handleDragEnd"
-            @mouseleave="handleDragEnd"
-            :style="isFloatingMode ? '-webkit-app-region: drag; pointer-events: auto;' : ''"
+            @mousedown="onCatMouseDown"
+            @mousemove="onCatMouseMove"
+            @mouseup="onCatMouseUp"
+            @mouseleave="onCatMouseUp"
+            :style="isFloatingMode ? 'pointer-events: auto;' : ''"
           />
 
           <img
@@ -1534,24 +1518,31 @@ onBeforeUnmount(() => {
 .pet-container.floating-mode .cat-image:hover {
   transform: none !important;
 }
-
+.pet-container.floating-mode .cat-image {
+  width: 170px !important;
+  height: 170px !important;
+  position: static !important;  /* 改为静态定位，由 .characters 控制位置 */
+  transform: none !important;
+  left: auto !important;
+  bottom: auto !important;
+}
 .pet-container.floating-mode {
   position: relative;
   top: 0;
   left: 0;
-  transform: none !important;
+  width: 350px !important;   /* 固定宽度，与窗口窗口参数一致 */
+  height: 400px !important;  /* 固定高度，与窗口一致 */
   background: transparent !important;
   background-image: none !important;
-  width: auto !important;
-  height: auto !important;
   overflow: visible;
-  display: inline-flex;
+  display: flex;              /* 保持 flex，但需要调整子元素 */
   flex-direction: column;
   align-items: center;
-  padding: 20px;
+  padding: 0;                /* 去除内边距，避免偏移 */
   border-radius: 0;
+  transform: none !important;
 }
-
+/*
 .pet-container.floating-mode .bubble {
   left: 40% !important;
   top: 30% !important; 
@@ -1559,20 +1550,22 @@ onBeforeUnmount(() => {
   -webkit-app-region: no-drag !important;
   z-index: 10 !important;         
   pointer-events: auto !important;
-}
+}*/
 
 .pet-container.floating-mode .characters {
-  left: 53% !important;
+  left: 50% !important;
   top: 50% !important;
   transform: translate(-50%, -50%) !important;
+  width: auto !important;   /* 确保不固定宽度 */
+  height: auto !important;
   z-index: 1 !important;           
 }
 
 .pet-container.floating-mode .pet-area {
   position: relative;
-  flex: 0 0 auto;
-  width: 280px;
-  height: 400px;
+  width: 100%;
+  height: 100%;
+  flex: 1;
 }
 
 .stats-box {
@@ -2048,24 +2041,7 @@ onBeforeUnmount(() => {
 }
 
 .archive-term {
-  position: relative;
-  /* 隐藏文字标签，使用图片作为唯一视觉元素 */
-  .archive-term { display: none !important; }
-
-  .archive-file-icon {
-  font-family: KaiTi, STKaiti, "KaiTi_GB2312", serif;
-  font-size: 12px;
-  font-weight: 700;
-  line-height: 1.15;
-  text-align: center;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  text-shadow: 0 1px 0 rgba(255, 232, 182, 0.34);
-}
-
-/* 隐藏文字标签，使用图片作为唯一视觉元素 */
-.archive-term { display: none !important; }
-
+  display: none !important;
 }
 
 .archive-detail-page {
