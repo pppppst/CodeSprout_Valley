@@ -7,6 +7,9 @@ const bcrypt = require('bcryptjs')
 const jwt = require('jsonwebtoken')
 
 const User = require('./models/User')
+// 👇 新增：引入节气统计和历史报告模型
+const TermDailyStat = require('./models/TermDailyStat')
+const TermReport = require('./models/TermReport')
 
 const app = express()
 const PORT = process.env.PORT || 3000
@@ -65,6 +68,10 @@ function authenticateToken(req, res, next) {
 app.get('/', (req, res) => {
   res.send('CS Valley 后端服务器已就绪 ✅')
 })
+
+// ==========================================
+// 1. 用户认证与基础存档模块
+// ==========================================
 
 app.post('/api/register', async (req, res) => {
   try {
@@ -209,6 +216,155 @@ app.get('/api/user/:username', authenticateToken, async (req, res) => {
   }
 
   res.json({ success: true, data: sanitizeUser(user) })
+})
+
+// ==========================================
+// 2. 节气每日统计模块 (Term Daily Stats)
+// ==========================================
+
+// 上传/累加当天节气数据
+app.post('/api/term-stats', authenticateToken, async (req, res) => {
+  try {
+    const { date, solarTerm } = req.body
+    const codeLines = Number(req.body.codeLines || 0)
+    const commitCount = Number(req.body.commitCount || 0)
+    const errorCount = Number(req.body.errorCount || 0)
+    const userId = req.auth.userId
+
+    if (!date || !solarTerm) {
+      return res.status(400).json({ success: false, message: '日期和节气名称不能为空' })
+    }
+
+    const updatedStat = await TermDailyStat.findOneAndUpdate(
+      { userId, date, solarTerm },
+      {
+        $inc: { 
+          codeLines: codeLines, 
+          commitCount: commitCount, 
+          errorCount: errorCount 
+        }
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    )
+
+    res.json({ success: true, data: updatedStat })
+  } catch (error) {
+    console.error('Update term stats failed:', error)
+    res.status(500).json({ success: false, message: '服务器内部错误' })
+  }
+})
+
+// 获取某节气的统计明细和汇总
+app.get('/api/term-stats', authenticateToken, async (req, res) => {
+  try {
+    const { solarTerm } = req.query
+    const userId = req.auth.userId
+
+    if (!solarTerm) {
+      return res.status(400).json({ success: false, message: '缺少参数 solarTerm' })
+    }
+
+    const stats = await TermDailyStat.find({ userId, solarTerm }).sort({ date: 1 })
+
+    let totalCodeLines = 0, totalCommitCount = 0, totalErrorCount = 0
+    stats.forEach(s => {
+      totalCodeLines += (s.codeLines || 0)
+      totalCommitCount += (s.commitCount || 0)
+      totalErrorCount += (s.errorCount || 0)
+    })
+
+    res.json({
+      success: true,
+      data: {
+        solarTerm,
+        dailyStats: stats,
+        totalCodeLines,
+        totalCommitCount,
+        totalErrorCount
+      }
+    })
+  } catch (error) {
+    console.error('Fetch term stats failed:', error)
+    res.status(500).json({ success: false, message: '服务器内部错误' })
+  }
+})
+
+// ==========================================
+// 3. 历史报告模块 (Term Reports)
+// ==========================================
+
+// 保存节气总结报告
+app.post('/api/reports', authenticateToken, async (req, res) => {
+  try {
+    const { solarTerm, periodStart, periodEnd, summary } = req.body
+    const userId = req.auth.userId
+
+    if (!solarTerm || !periodStart || !periodEnd) {
+      return res.status(400).json({ success: false, message: '报告参数不完整' })
+    }
+
+    // 先查出这个节气所有的每日统计（作为历史快照保存）
+    const stats = await TermDailyStat.find({ userId, solarTerm }).sort({ date: 1 })
+    
+    let totalCodeLines = 0, totalCommitCount = 0, totalErrorCount = 0
+    stats.forEach(s => {
+      totalCodeLines += (s.codeLines || 0)
+      totalCommitCount += (s.commitCount || 0)
+      totalErrorCount += (s.errorCount || 0)
+    })
+
+    // 同一用户、同一节气、同一周期重复保存时，覆盖旧记录
+    const report = await TermReport.findOneAndUpdate(
+      { userId, solarTerm, periodStart, periodEnd },
+      {
+        $set: {
+          totalCodeLines,
+          totalCommitCount,
+          totalErrorCount,
+          dailyStats: stats,
+          summary: summary || ''
+        }
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    )
+
+    res.json({ success: true, message: '报告保存成功', data: report })
+  } catch (error) {
+    console.error('Save report failed:', error)
+    res.status(500).json({ success: false, message: '服务器内部错误' })
+  }
+})
+
+// 查询我的所有历史报告列表 (可选传 ?solarTerm=立夏)
+app.get('/api/reports', authenticateToken, async (req, res) => {
+  try {
+    const { solarTerm } = req.query
+    const userId = req.auth.userId
+
+    const query = { userId }
+    if (solarTerm) query.solarTerm = solarTerm
+
+    // 按创建时间倒序排列（最新的在最上面）
+    const reports = await TermReport.find(query).sort({ createdAt: -1 })
+    res.json({ success: true, data: reports })
+  } catch (error) {
+    console.error('Fetch reports failed:', error)
+    res.status(500).json({ success: false, message: '服务器内部错误' })
+  }
+})
+
+// 查看某份具体的报告详情
+app.get('/api/reports/:id', authenticateToken, async (req, res) => {
+  try {
+    const report = await TermReport.findOne({ _id: req.params.id, userId: req.auth.userId })
+    if (!report) {
+      return res.status(404).json({ success: false, message: '找不到该报告，或无权访问' })
+    }
+    res.json({ success: true, data: report })
+  } catch (error) {
+    console.error('Fetch report detail failed:', error)
+    res.status(500).json({ success: false, message: '服务器内部错误' })
+  }
 })
 
 app.listen(PORT, () => {

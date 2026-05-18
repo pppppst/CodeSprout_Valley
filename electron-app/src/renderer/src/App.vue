@@ -1,7 +1,8 @@
 ﻿<script setup>
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { getActiveJieQi } from './utils/calendar'
-import { registerAccount, loginAccount, fetchCloudSave, syncCloudSave } from './utils/cloudApi'
+// 🌟 1. 引入所有新的云端接口
+import { registerAccount, loginAccount, fetchCloudSave, syncCloudSave, uploadTermDailyStat, fetchTermStats, saveTermReport, fetchHistoryReports } from './utils/cloudApi'
 import WeatherEffect from './components/WeatherEffect.vue'
 import { useFloatingWindow } from './components/floatingWindow'
 import { SolarUtil } from 'lunar-javascript'
@@ -19,6 +20,16 @@ const hasNewReport = ref(false)
 const selectedArchiveTermKey = ref('')
 const latestHarvestTermKey = ref('')
 const latestReportTermKey = ref('')
+
+// ==========================================
+// 🌟 新增：自动同步缓冲池 (存钱罐)
+// ==========================================
+const pendingSync = ref({
+  codeLines: 0,
+  commitCount: 0,
+  errorCount: 0
+})
+let autoSyncTimer = null
 
 function setAuthSession(token, username) {
   cloudToken.value = token
@@ -128,6 +139,52 @@ async function handleCloudSync() {
   }
 }
 
+// ==========================================
+// 🌟 新增：后台自动静默同步逻辑 (Bug已修复版)
+// ==========================================
+async function processAutoSync() {
+  // 未登录时不自动上传云端，但本地数据仍正常累计
+  if (!cloudToken.value) return 
+
+  const hasPendingStats = pendingSync.value.codeLines > 0 || pendingSync.value.commitCount > 0 || pendingSync.value.errorCount > 0
+  const linesToSync = Math.max(0, codeLines.value - syncedCodeLines.value)
+  
+  try {
+    // 1. 🌟 修复：无条件同步总资产！这样你的喂猫、浇水等物资变化都会每 30 秒上云，并且刷新界面的同步时间。
+    const archivePayload = {
+      addedLines: linesToSync,
+      catFood: foodStock.value,
+      waterDrops: waterStock.value,
+      plantStage: currentPlantStage.value
+    }
+    const syncResult = await syncCloudSave(cloudToken.value, archivePayload)
+    applyCloudSave(syncResult.data) // 这行会让界面的“最近同步时间”刷新！
+
+    // 2. 再上传当天的节气增量统计数据（只有有数据时才上传这部分）
+    if (hasPendingStats) {
+      const statsPayload = {
+        date: getTodayString(),
+        solarTerm: currentSolarTerm.value || '未知',
+        codeLines: pendingSync.value.codeLines,
+        commitCount: pendingSync.value.commitCount,
+        errorCount: pendingSync.value.errorCount
+      }
+      
+      await uploadTermDailyStat(cloudToken.value, statsPayload)
+
+      // 🌟 核心防丢机制：只有云端返回成功，才清空本地缓冲池
+      pendingSync.value.codeLines = 0
+      pendingSync.value.commitCount = 0
+      pendingSync.value.errorCount = 0
+    }
+  } catch (error) {
+    console.warn('[CS Valley] 自动同步失败，数据已暂存本地，等待下一次重试:', error)
+    if (error.status === 401) {
+      clearAuthSession() // 如果 Token 过期，自动退出登录
+    }
+  }
+}
+
 function handleLogout() {
   clearAuthSession()
   authUsername.value = ''
@@ -136,7 +193,18 @@ function handleLogout() {
   syncedCodeLines.value = 0
   foodStock.value = 0
   waterStock.value = 0
-  authStatusMessage.value = '已退出登录，本地账号状态已清空'
+
+  // 🌟 修复状态泄漏：彻底清空图鉴、报告和植物状态，确保下一个用户面对的是纯净环境
+  harvestRecords.value = {}
+  reportRecords.value = {}
+  plantWaterByTerm.value = {}
+  hasNewHarvest.value = false
+  hasNewReport.value = false
+  selectedArchiveTermKey.value = ''
+  latestHarvestTermKey.value = ''
+  latestReportTermKey.value = ''
+
+  authStatusMessage.value = '已退出登录，本地账号状态已彻底清空'
 }
 
 
@@ -185,7 +253,6 @@ const suppressResourceRewards = ref(false)
 // ==========================================
 // 3. 宠物交互控制 (引入序列帧与周期性动画)
 // ==========================================
-// 可选状态: 'sleep' | 'play' | 'eating' | 'happy' | 'refused' | 'stretching' | 'jumping' | 'lifted'
 const catState = ref('sleep')
 
 function createSequentialFrames(folderName, filePrefix, frameCount, padLength) {
@@ -501,7 +568,7 @@ function resetToday() {
 }
 
 // ==========================================
-// 4. 插件数据更新监听
+// 4. 插件数据更新监听 (🌟 接入缓冲池)
 // ==========================================
 function applyActivityUpdate(data) {
   if (!data || typeof data !== 'object') return
@@ -509,11 +576,14 @@ function applyActivityUpdate(data) {
 
   if (typeof data.codeAdded === 'number' && Number.isFinite(data.codeAdded)) {
     codeLines.value = Math.max(0, codeLines.value + data.codeAdded)
+    pendingSync.value.codeLines += data.codeAdded // 🌟 存入缓冲池
   }
 
   if (typeof data.codePassed === 'number' && Number.isFinite(data.codePassed) && data.codePassed > 0) {
     catExp.value += data.codePassed * 5
     todayPassed.value += data.codePassed
+    pendingSync.value.commitCount += data.codePassed // 🌟 存入缓冲池 (暂用通过数代表提交数)
+    
     message.value = `✅ ${data.codePassed} 个文件通过，经验提升中...`
     catState.value = 'happy'
     resetCatState(2500)
@@ -521,6 +591,8 @@ function applyActivityUpdate(data) {
 
   if (typeof data.errorCount === 'number' && Number.isFinite(data.errorCount) && data.errorCount > 0) {
     todayErrors.value += data.errorCount
+    pendingSync.value.errorCount += data.errorCount // 🌟 存入缓冲池
+    
     message.value = `⚠️ 发现 ${data.errorCount} 个新错误，快去看看吧！`
     catState.value = 'refused' 
     resetCatState(3000)
@@ -560,14 +632,111 @@ watch(rewardedCodeThreshold, (newValue) => {
 // ==========================================
 // 5. 辅助功能 (节气档案、设置)
 // ==========================================
-function openArchive() {
+async function openArchive() {
   isArchiveOpen.value = true
   hasNewHarvest.value = false
   hasNewReport.value = false
   selectedArchiveTermKey.value = getDefaultArchiveTermKey()
   message.value = '📖 正在打开节气档案...'
   resetCatState(2000)
+
+  // 🌟 新增：每次翻开档案，自动拉取后端历史报告
+  if (cloudToken.value) {
+    try {
+      const res = await fetchHistoryReports(cloudToken.value)
+      if (res.success && res.data) {
+        const cloudReports = {}
+        res.data.forEach(report => {
+          const termKey = solarTermMap[report.solarTerm]
+          if (termKey) {
+            // 🛠️ 核心修复：处理后台增量为0，但实际有总资产的情况
+            let displayCodeLines = report.totalCodeLines
+            const match = report.summary.match(/总代码资产为 (\d+) 行/)
+            if (match) {
+              displayCodeLines = parseInt(match[1], 10) // 把文案里的真实行数抠出来显示
+            }
+
+            cloudReports[termKey] = {
+              termName: report.solarTerm,
+              termKey: termKey,
+              title: `${report.solarTerm}结算周报`,
+              date: `${report.periodStart} 生成`,
+              owner: loggedInUser.value || '本地种植者',
+              totalCodeLines: displayCodeLines, // 👈 使用修复后的数值
+              todayPassed: report.totalCommitCount,
+              todayErrors: report.totalErrorCount,
+              passRate: (report.totalCommitCount + report.totalErrorCount === 0) ? '暂无' : `${Math.round((report.totalCommitCount / (report.totalCommitCount + report.totalErrorCount)) * 100)}%`,
+              totalActions: '已归档',
+              plantStage: '已归档',
+              syncText: '☁️ 云端永久快照',
+              summary: report.summary
+            }
+          }
+        })
+        // 将云端报告覆盖到本地 UI 数据中
+        reportRecords.value = { ...reportRecords.value, ...cloudReports }
+        
+        if (!selectedArchiveTermKey.value) {
+            selectedArchiveTermKey.value = getDefaultArchiveTermKey()
+        }
+      }
+    } catch (error) {
+      console.error('拉取云端历史报告失败:', error)
+    }
+  }
 }
+
+// 🌟 新增：主动向云端请求当前节气统计并生成新报告
+async function generateAndSaveCloudReport() {
+  if (!cloudToken.value) {
+    message.value = '⚠️ 请先登录账号再生成云端报告！'
+    resetCatState(3000)
+    return
+  }
+
+  // 强制只使用系统当前的真实节气
+  const termName = currentSolarTerm.value || '未知'
+  
+  if (selectedArchiveTerm.value && selectedArchiveTerm.value.name !== termName) {
+    message.value = `⚠️ 只能生成当前节气【${termName}】的报告！`
+    resetCatState(3000)
+    return
+  }
+
+  message.value = `📊 正在向云端请求 ${termName} 的统计数据...`
+
+  try {
+    const statsRes = await fetchTermStats(cloudToken.value, termName)
+    if (!statsRes.success) throw new Error(statsRes.message)
+
+    const data = statsRes.data
+    let summaryText = ''
+    
+    // 🌟 智能识别文案：如果是直接修改数据库总资产导致的 0 增量
+    if (data.totalCodeLines === 0 && codeLines.value > 0) {
+        summaryText = `${termName}节气已结算。由于近期直接同步了云端总存档，本节气期间没有计入增量代码。您目前的云端总代码资产为 ${codeLines.value} 行，继续加油哦！`
+    } else {
+        summaryText = `${termName}节气已结算。云端记录显示：本节气期间累计编写代码 ${data.totalCodeLines} 行，提交 ${data.totalCommitCount} 次，发生报错 ${data.totalErrorCount} 次。`
+    }
+
+    const reportPayload = {
+      solarTerm: termName,
+      periodStart: getTodayString(),
+      periodEnd: getTodayString(),
+      summary: summaryText
+    }
+
+    await saveTermReport(cloudToken.value, reportPayload)
+
+    message.value = `✨ ${termName} 云端报告已永久保存！`
+    resetCatState(3000)
+    await openArchive()
+  } catch (error) {
+    message.value = `❌ 生成报告失败: ${error.message}`
+    resetCatState(3000)
+  }
+}
+
 function closeArchive() {
   isArchiveOpen.value = false
   selectedArchiveTermKey.value = ''
@@ -661,17 +830,23 @@ const unlockedModules = import.meta.glob('./assets/unlocked/*.png', { eager: tru
 
 function getArchiveCellImage(termKey, hasRecord) {
   const modules = hasRecord ? unlockedModules : lockedModules
-  // 优先匹配包含 `/${termKey}.png` 的文件名（处理带序号前缀的文件）
+  
+  // 1. 尝试模糊匹配文件名
   for (const p in modules) {
-    if (p.includes(`/${termKey}.png`)) return modules[p]
+    const name = p.split('/').pop().toLowerCase()
+    if (name.includes(termKey.toLowerCase())) return modules[p]
   }
-  // 兜底：尝试不带前缀的直接匹配
-  for (const p in modules) {
-    const name = p.split('/').pop()
-    if (name && name.includes(termKey)) return modules[p]
+  
+  // 2. 🌟 修复错位：如果是已解锁状态但对应的彩色图没找到，强制退回到未解锁图，绝不拿别的节气顶替！
+  if (hasRecord) {
+    for (const p in lockedModules) {
+      const name = p.split('/').pop().toLowerCase()
+      if (name.includes(termKey.toLowerCase())) return lockedModules[p]
+    }
   }
-  // 最后返回第一个图片（如果有）或空字符串
-  return Object.values(modules)[0] || ''
+  
+  // 3. 宁可空白也绝不错位
+  return ''
 }
 const harvestImages = {
   seedling: new URL('./assets/harvest/harvest-seedling.png', import.meta.url).href,
@@ -1137,7 +1312,7 @@ function getTermPinyinForDate(date) {
 }
 
 // ==========================================
-// 8. 生命周期管理 (包含跨日重置校验)
+// 8. 生命周期管理 (包含跨日重置校验 & 🌟 挂载自动同步)
 // ==========================================
 onMounted(() => {
   checkHash()
@@ -1182,6 +1357,9 @@ onMounted(() => {
       }
     }
   }, 60000)
+
+  // 🌟 挂载 30 秒自动同步定时器
+  autoSyncTimer = setInterval(processAutoSync, 30000)
 })
 
 onUnmounted(() => {
@@ -1191,6 +1369,11 @@ onUnmounted(() => {
     offActivityUpdate = null
   }
   if (timerId) clearInterval(timerId)
+  
+  // 🌟 卸载定时器，并在退出前进行最后一次突击同步
+  if (autoSyncTimer) clearInterval(autoSyncTimer)
+  processAutoSync()
+
   teardownFloatingListeners()
   stopBaseAnimation()
   stopPeriodicTimer()
@@ -1379,8 +1562,21 @@ onUnmounted(() => {
                   <p v-if="selectedArchiveReportRecord" class="term-report-paper-summary">
                     {{ selectedArchiveReportRecord.summary }}
                   </p>
-                  <p v-else class="archive-empty-copy">暂无节气报告，完成一次沙盘结算后会生成记录。</p>
-
+                  <div v-else class="archive-empty-action" style="margin-top: 15px;">
+                    <p class="archive-empty-copy">暂无节气报告。</p>
+                    
+                    <button v-if="cloudToken && selectedArchiveTerm && selectedArchiveTerm.name === currentSolarTerm" class="cloud-btn primary" style="width: 100%; margin-top: 10px; padding: 12px; font-weight: bold; background: #4f8f5f;" @click="generateAndSaveCloudReport">
+                      📊 生成【{{ currentSolarTerm }}】云端报告
+                    </button>
+                    
+                    <p v-else-if="cloudToken" class="archive-empty-copy" style="font-size: 12px; color: #8a7658; margin-top: 5px;">
+                      (当前真实时间为【{{ currentSolarTerm }}】，只能在对应档案页生成报告)
+                    </p>
+                    
+                    <p v-else class="archive-empty-copy" style="font-size: 12px; color: #8a7658; margin-top: 5px;">
+                      (请先登录以生成云端报告)
+                    </p>
+                  </div>
                   <div class="term-report-chart-placeholder archive-picture-frame">
                     <span class="archive-tape" aria-hidden="true"></span>
                     <span>节气图</span>
@@ -1535,22 +1731,13 @@ onUnmounted(() => {
   background: transparent !important;
   background-image: none !important;
   overflow: visible;
-  display: flex;              /* 保持 flex，但需要调整子元素 */
+  display: flex;             /* 保持 flex，但需要调整子元素 */
   flex-direction: column;
   align-items: center;
   padding: 0;                /* 去除内边距，避免偏移 */
   border-radius: 0;
   transform: none !important;
 }
-/*
-.pet-container.floating-mode .bubble {
-  left: 40% !important;
-  top: 30% !important; 
-  transform: translate(-50%, -50%) !important;
-  -webkit-app-region: no-drag !important;
-  z-index: 10 !important;         
-  pointer-events: auto !important;
-}*/
 
 .pet-container.floating-mode .characters {
   left: 50% !important;
