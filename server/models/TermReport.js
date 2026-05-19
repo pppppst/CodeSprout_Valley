@@ -8,6 +8,10 @@ const termReportSchema = new mongoose.Schema({
   totalCodeLines: { type: Number, default: 0 },
   totalCommitCount: { type: Number, default: 0 },
   totalErrorCount: { type: Number, default: 0 },
+  plantStage: { type: Number, default: 1 },
+  harvestStage: { type: Number, default: 1 },
+  harvestTier: { type: String, default: "" },
+  harvestItemName: { type: String, default: "" },
   dailyStats: { type: Array, default: [] }, // 保存生成报告时的快照，防止以后历史数据被篡改
   summary: { type: String, default: "" }
 }, { 

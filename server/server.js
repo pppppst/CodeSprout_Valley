@@ -298,6 +298,12 @@ app.post('/api/reports', authenticateToken, async (req, res) => {
   try {
     const { solarTerm, periodStart, periodEnd, summary } = req.body
     const userId = req.auth.userId
+    const rawPlantStage = Number(req.body.plantStage || 1)
+    const rawHarvestStage = Number(req.body.harvestStage || 1)
+    const plantStage = Number.isFinite(rawPlantStage) ? Math.max(1, Math.min(4, rawPlantStage)) : 1
+    const harvestStage = Number.isFinite(rawHarvestStage) ? Math.max(1, Math.min(3, rawHarvestStage)) : 1
+    const harvestTier = String(req.body.harvestTier || '').trim().slice(0, 32)
+    const harvestItemName = String(req.body.harvestItemName || '').trim().slice(0, 64)
 
     if (!solarTerm || !periodStart || !periodEnd) {
       return res.status(400).json({ success: false, message: '报告参数不完整' })
@@ -315,12 +321,17 @@ app.post('/api/reports', authenticateToken, async (req, res) => {
 
     // 同一用户、同一节气、同一周期重复保存时，覆盖旧记录
     const report = await TermReport.findOneAndUpdate(
+    const report = await TermReport.findOneAndUpdate(
       { userId, solarTerm, periodStart, periodEnd },
       {
         $set: {
           totalCodeLines,
           totalCommitCount,
           totalErrorCount,
+          plantStage,
+          harvestStage,
+          harvestTier,
+          harvestItemName,
           dailyStats: stats,
           summary: summary || ''
         }

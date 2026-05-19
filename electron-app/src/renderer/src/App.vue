@@ -20,6 +20,7 @@ const hasNewReport = ref(false)
 const selectedArchiveTermKey = ref('')
 const latestHarvestTermKey = ref('')
 const latestReportTermKey = ref('')
+const previewImage = ref(null)
 
 // ==========================================
 // 🌟 新增：自动同步缓冲池 (存钱罐)
@@ -646,12 +647,14 @@ async function openArchive() {
       const res = await fetchHistoryReports(cloudToken.value)
       if (res.success && res.data) {
         const cloudReports = {}
+        const cloudHarvests = {}
         res.data.forEach(report => {
           const termKey = solarTermMap[report.solarTerm]
-          if (termKey) {
+          if (termKey && !cloudReports[termKey]) {
             // 🛠️ 核心修复：处理后台增量为0，但实际有总资产的情况
             let displayCodeLines = report.totalCodeLines
-            const match = report.summary.match(/总代码资产为 (\d+) 行/)
+            const reportSummary = String(report.summary || '')
+            const match = reportSummary.match(/总代码资产为 (\d+) 行/)
             if (match) {
               displayCodeLines = parseInt(match[1], 10) // 把文案里的真实行数抠出来显示
             }
@@ -667,14 +670,27 @@ async function openArchive() {
               todayErrors: report.totalErrorCount,
               passRate: (report.totalCommitCount + report.totalErrorCount === 0) ? '暂无' : `${Math.round((report.totalCommitCount / (report.totalCommitCount + report.totalErrorCount)) * 100)}%`,
               totalActions: '已归档',
-              plantStage: '已归档',
+              plantStage: report.harvestTier && Number.isFinite(Number(report.plantStage)) ? Number(report.plantStage) : '已归档',
               syncText: '☁️ 云端永久快照',
-              summary: report.summary
+              summary: reportSummary
+            }
+
+            const restoredHarvest = buildHarvestRecordFromReport(report, termKey)
+            if (restoredHarvest) {
+              cloudHarvests[termKey] = restoredHarvest
             }
           }
         })
         // 将云端报告覆盖到本地 UI 数据中
         reportRecords.value = { ...reportRecords.value, ...cloudReports }
+        const mergedHarvestRecords = { ...harvestRecords.value }
+        Object.values(cloudHarvests).forEach((record) => {
+          const existing = mergedHarvestRecords[record.termKey]
+          if (!existing || harvestTierRank[existing.tier] <= harvestTierRank[record.tier]) {
+            mergedHarvestRecords[record.termKey] = record
+          }
+        })
+        harvestRecords.value = mergedHarvestRecords
         
         if (!selectedArchiveTermKey.value) {
             selectedArchiveTermKey.value = getDefaultArchiveTermKey()
@@ -719,14 +735,41 @@ async function generateAndSaveCloudReport() {
         summaryText = `${termName}节气已结算。云端记录显示：本节气期间累计编写代码 ${data.totalCodeLines} 行，提交 ${data.totalCommitCount} 次，发生报错 ${data.totalErrorCount} 次。`
     }
 
+    const stage = currentPlantStage.value
+    const tier = getHarvestTierByStage(stage)
+    const harvestStage = getHarvestStageByPlantStage(stage)
     const reportPayload = {
       solarTerm: termName,
       periodStart: getTodayString(),
       periodEnd: getTodayString(),
-      summary: summaryText
+      summary: summaryText,
+      plantStage: stage,
+      harvestStage,
+      harvestTier: tier,
+      harvestItemName: harvestCopy[tier].itemName
     }
 
-    await saveTermReport(cloudToken.value, reportPayload)
+    const saveResult = await saveTermReport(cloudToken.value, reportPayload)
+    const termKey = solarTermMap[termName] || currentTermPinyin.value
+    const savedReport = saveResult.data || reportPayload
+    saveHarvestRecord(buildHarvestRecord(termName, termKey, stage))
+    saveReportRecord({
+      termName,
+      termKey,
+      title: `${termName}结算周报`,
+      date: `${savedReport.periodStart || getTodayString()} 生成`,
+      owner: loggedInUser.value || '本地种植者',
+      totalCodeLines: savedReport.totalCodeLines ?? data.totalCodeLines,
+      todayPassed: savedReport.totalCommitCount ?? data.totalCommitCount,
+      todayErrors: savedReport.totalErrorCount ?? data.totalErrorCount,
+      passRate: (data.totalCommitCount + data.totalErrorCount === 0) ? '暂无' : `${Math.round((data.totalCommitCount / (data.totalCommitCount + data.totalErrorCount)) * 100)}%`,
+      totalActions: '已归档',
+      plantStage: stage,
+      syncText: '☁️ 云端永久快照',
+      summary: summaryText
+    })
+    latestHarvestTermKey.value = termKey
+    latestReportTermKey.value = termKey
 
     message.value = `✨ ${termName} 云端报告已永久保存！`
     resetCatState(3000)
@@ -740,9 +783,17 @@ async function generateAndSaveCloudReport() {
 function closeArchive() {
   isArchiveOpen.value = false
   selectedArchiveTermKey.value = ''
+  closeImagePreview()
 }
 function selectArchiveTerm(termKey) {
   selectedArchiveTermKey.value = termKey
+}
+function openImagePreview(src, alt) {
+  if (!src) return
+  previewImage.value = { src, alt }
+}
+function closeImagePreview() {
+  previewImage.value = null
 }
 function openSettings() {
   message.value = '⚙️ 正在打开设置...'
@@ -815,7 +866,7 @@ function getDefaultArchiveTermKey() {
   const firstRecordedTerm = solarTermEntries.find((term) => {
     return harvestRecords.value[term.key] || reportRecords.value[term.key]
   })
-  return firstRecordedTerm?.key || solarTermEntries[0]?.key || ''
+  return currentTermPinyin.value || firstRecordedTerm?.key || solarTermEntries[0]?.key || ''
 }
 
 const DEFAULT_PLANT_TERM = 'xiazhi'
@@ -848,11 +899,15 @@ function getArchiveCellImage(termKey, hasRecord) {
   // 3. 宁可空白也绝不错位
   return ''
 }
-const harvestImages = {
-  seedling: new URL('./assets/harvest/harvest-seedling.png', import.meta.url).href,
-  mature: new URL('./assets/harvest/harvest-mature.png', import.meta.url).href,
-  premium: new URL('./assets/harvest/harvest-premium.png', import.meta.url).href
-}
+const harvestImageModules = import.meta.glob('./assets/harvest/*/stage*.png', {
+  eager: true,
+  import: 'default'
+})
+const solarTermImageModules = import.meta.glob('./assets/SolarTerm/*.png', {
+  eager: true,
+  import: 'default'
+})
+const fallbackHarvestImage = new URL('./assets/harvest/harvest-seedling.png', import.meta.url).href
 const harvestTierRank = {
   seedling: 1,
   mature: 2,
@@ -902,6 +957,45 @@ function getHarvestTierByStage(stage) {
   return 'seedling'
 }
 
+function getHarvestStageByPlantStage(stage) {
+  if (stage >= 4) return 3
+  if (stage >= 3) return 2
+  return 1
+}
+
+function getHarvestImageUrlByHarvestStage(termKey, harvestStage) {
+  const safeTermKey = solarTermEntries.some((term) => term.key === termKey) ? termKey : DEFAULT_PLANT_TERM
+  const safeHarvestStage = Math.max(1, Math.min(3, Number(harvestStage) || 1))
+  const imageKey = `./assets/harvest/${safeTermKey}/stage${safeHarvestStage}.png`
+  const fallbackKey = `./assets/harvest/${DEFAULT_PLANT_TERM}/stage1.png`
+
+  return harvestImageModules[imageKey] || harvestImageModules[fallbackKey] || fallbackHarvestImage
+}
+
+function getHarvestImageUrl(termKey, plantStage) {
+  return getHarvestImageUrlByHarvestStage(termKey, getHarvestStageByPlantStage(plantStage))
+}
+
+function buildHarvestRecordFromReport(report, termKey) {
+  const tier = String(report.harvestTier || '')
+  if (!harvestTierRank[tier]) return null
+
+  const term = solarTermEntries.find((entry) => entry.key === termKey)
+  const plantStage = Math.max(1, Math.min(4, Number(report.plantStage) || 1))
+  const harvestStage = Math.max(1, Math.min(3, Number(report.harvestStage) || getHarvestStageByPlantStage(plantStage)))
+  const itemName = String(report.harvestItemName || harvestCopy[tier].itemName)
+
+  return {
+    termName: term?.name || String(report.solarTerm || ''),
+    termKey,
+    stage: plantStage,
+    tier,
+    itemName,
+    image: getHarvestImageUrlByHarvestStage(termKey, harvestStage),
+    message: harvestCopy[tier].message
+  }
+}
+
 const currentPlantStage = computed(() => {
   const waterings = plantWaterByTerm.value[currentTermPinyin.value] || 0
   return getPlantStageByWaterings(waterings)
@@ -919,6 +1013,23 @@ const selectedArchiveHarvestRecord = computed(() => {
 const selectedArchiveReportRecord = computed(() => {
   if (!selectedArchiveTermKey.value) return null
   return reportRecords.value[selectedArchiveTermKey.value] || null
+})
+
+const selectedArchiveHasRecord = computed(() => {
+  return Boolean(selectedArchiveHarvestRecord.value || selectedArchiveReportRecord.value)
+})
+
+const selectedArchiveIsCurrentTerm = computed(() => {
+  return Boolean(selectedArchiveTerm.value && selectedArchiveTerm.value.name === currentSolarTerm.value)
+})
+
+const canGenerateSelectedTermReport = computed(() => {
+  return Boolean(cloudToken.value && selectedArchiveIsCurrentTerm.value)
+})
+
+const selectedArchiveSolarTermImage = computed(() => {
+  if (!selectedArchiveTerm.value || (!selectedArchiveHasRecord.value && !selectedArchiveIsCurrentTerm.value)) return ''
+  return solarTermImageModules[`./assets/SolarTerm/${selectedArchiveTerm.value.key}.png`] || ''
 })
 
 const archiveCells = computed(() => {
@@ -1222,7 +1333,7 @@ function buildHarvestRecord(termName, termKey, stage) {
     stage,
     tier,
     itemName: harvestCopy[tier].itemName,
-    image: harvestImages[tier],
+    image: getHarvestImageUrl(termKey, stage),
     message: harvestCopy[tier].message
   }
 }
@@ -1537,7 +1648,15 @@ onUnmounted(() => {
               <div class="archive-detail-scroll">
                 <section class="archive-section archive-harvest-section">
                   <h4>图鉴收获</h4>
-                  <div class="archive-picture-frame">
+                  <div
+                    class="archive-picture-frame harvest-picture-frame"
+                    :class="{ clickable: selectedArchiveHarvestRecord }"
+                    :role="selectedArchiveHarvestRecord ? 'button' : undefined"
+                    :tabindex="selectedArchiveHarvestRecord ? 0 : undefined"
+                    @click="selectedArchiveHarvestRecord && openImagePreview(selectedArchiveHarvestRecord.image, selectedArchiveTerm ? `${selectedArchiveTerm.name}${selectedArchiveHarvestRecord.itemName}` : selectedArchiveHarvestRecord.itemName)"
+                    @keydown.enter="selectedArchiveHarvestRecord && openImagePreview(selectedArchiveHarvestRecord.image, selectedArchiveTerm ? `${selectedArchiveTerm.name}${selectedArchiveHarvestRecord.itemName}` : selectedArchiveHarvestRecord.itemName)"
+                    @keydown.space.prevent="selectedArchiveHarvestRecord && openImagePreview(selectedArchiveHarvestRecord.image, selectedArchiveTerm ? `${selectedArchiveTerm.name}${selectedArchiveHarvestRecord.itemName}` : selectedArchiveHarvestRecord.itemName)"
+                  >
                     <span class="archive-tape" aria-hidden="true"></span>
                     <img
                       v-if="selectedArchiveHarvestRecord"
@@ -1551,7 +1670,9 @@ onUnmounted(() => {
                     第 {{ selectedArchiveHarvestRecord.stage }} 阶段 · {{ selectedArchiveHarvestRecord.itemName }}
                   </p>
                   <p v-if="selectedArchiveHarvestRecord" class="harvest-detail-copy">{{ selectedArchiveHarvestRecord.message }}</p>
-                  <p v-else class="archive-empty-copy">这个节气还没有收获，完成一次沙盘结算后，果实会来到这里。</p>
+                  <p v-else-if="selectedArchiveReportRecord" class="archive-empty-copy">这个节气暂无果实图鉴记录。</p>
+                  <p v-else-if="selectedArchiveIsCurrentTerm" class="archive-empty-copy">这个节气还没有收获，完成一次沙盘结算后，果实会来到这里。</p>
+                  <p v-else class="archive-empty-copy">尚未经历这个节气，暂无图鉴。</p>
                 </section>
 
                 <section class="archive-section archive-report-section">
@@ -1565,21 +1686,40 @@ onUnmounted(() => {
                   <div v-else class="archive-empty-action" style="margin-top: 15px;">
                     <p class="archive-empty-copy">暂无节气报告。</p>
                     
-                    <button v-if="cloudToken && selectedArchiveTerm && selectedArchiveTerm.name === currentSolarTerm" class="cloud-btn primary" style="width: 100%; margin-top: 10px; padding: 12px; font-weight: bold; background: #4f8f5f;" @click="generateAndSaveCloudReport">
+                    <button v-if="canGenerateSelectedTermReport" class="cloud-btn primary" style="width: 100%; margin-top: 10px; padding: 12px; font-weight: bold; background: #4f8f5f;" @click="generateAndSaveCloudReport">
                       📊 生成【{{ currentSolarTerm }}】云端报告
                     </button>
                     
-                    <p v-else-if="cloudToken" class="archive-empty-copy" style="font-size: 12px; color: #8a7658; margin-top: 5px;">
-                      (当前真实时间为【{{ currentSolarTerm }}】，只能在对应档案页生成报告)
-                    </p>
-                    
-                    <p v-else class="archive-empty-copy" style="font-size: 12px; color: #8a7658; margin-top: 5px;">
+                    <p v-else-if="selectedArchiveIsCurrentTerm" class="archive-empty-copy" style="font-size: 12px; color: #8a7658; margin-top: 5px;">
                       (请先登录以生成云端报告)
                     </p>
+
+                    <p v-else-if="selectedArchiveHasRecord" class="archive-empty-copy" style="font-size: 12px; color: #8a7658; margin-top: 5px;">
+                      (这个节气已有图鉴记录，暂未生成节气报告)
+                    </p>
+
+                    <p v-else class="archive-empty-copy" style="font-size: 12px; color: #8a7658; margin-top: 5px;">
+                      (尚未经历这个节气，暂无历史报告)
+                    </p>
                   </div>
-                  <div class="term-report-chart-placeholder archive-picture-frame">
+                  <div
+                    class="term-report-chart-placeholder archive-picture-frame"
+                    :class="{ clickable: selectedArchiveSolarTermImage }"
+                    :role="selectedArchiveSolarTermImage ? 'button' : undefined"
+                    :tabindex="selectedArchiveSolarTermImage ? 0 : undefined"
+                    @click="openImagePreview(selectedArchiveSolarTermImage, selectedArchiveTerm ? `${selectedArchiveTerm.name}节气图` : '节气图')"
+                    @keydown.enter="openImagePreview(selectedArchiveSolarTermImage, selectedArchiveTerm ? `${selectedArchiveTerm.name}节气图` : '节气图')"
+                    @keydown.space.prevent="openImagePreview(selectedArchiveSolarTermImage, selectedArchiveTerm ? `${selectedArchiveTerm.name}节气图` : '节气图')"
+                  >
                     <span class="archive-tape" aria-hidden="true"></span>
-                    <span>节气图</span>
+                    <img
+                      v-if="selectedArchiveSolarTermImage"
+                      class="term-report-image"
+                      :src="selectedArchiveSolarTermImage"
+                      :alt="selectedArchiveTerm ? `${selectedArchiveTerm.name}节气图` : '节气图'"
+                      draggable="false"
+                    />
+                    <span v-else>暂无节气图</span>
                   </div>
 
                   <div v-if="selectedArchiveReportRecord" class="term-report-data-grid">
@@ -1599,6 +1739,21 @@ onUnmounted(() => {
             </aside>
           </div>
         </section>
+
+        <div
+          v-if="previewImage"
+          class="image-preview-mask"
+          style="-webkit-app-region: no-drag;"
+          @click.self.stop="closeImagePreview"
+        >
+          <button class="image-preview-close" @click="closeImagePreview">×</button>
+          <img
+            class="image-preview-img"
+            :src="previewImage.src"
+            :alt="previewImage.alt"
+            draggable="false"
+          />
+        </div>
       </div>
 
       <div
@@ -2333,6 +2488,18 @@ onUnmounted(() => {
   height: 210px;
   object-fit: contain;
   filter: drop-shadow(0 8px 8px rgba(89, 51, 22, 0.2));
+  user-select: none;
+}
+
+.harvest-picture-frame.clickable {
+  cursor: zoom-in;
+}
+
+.harvest-picture-frame.clickable:hover {
+  transform: translateY(-1px);
+  box-shadow:
+    0 10px 18px rgba(103, 78, 43, 0.24),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.72);
 }
 
 .archive-picture-placeholder {
@@ -2371,11 +2538,68 @@ onUnmounted(() => {
 }
 
 .term-report-chart-placeholder {
+  overflow: hidden;
   min-height: 118px;
   margin-top: 18px;
   color: rgba(84, 111, 67, 0.58);
   font-family: KaiTi, STKaiti, serif;
   font-size: 22px;
+}
+
+.term-report-chart-placeholder.clickable {
+  cursor: zoom-in;
+}
+
+.term-report-chart-placeholder.clickable:hover {
+  transform: translateY(-1px);
+  box-shadow:
+    0 10px 18px rgba(103, 78, 43, 0.24),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.72);
+}
+
+.term-report-image {
+  width: 100%;
+  height: 190px;
+  object-fit: cover;
+  border-radius: 3px;
+  user-select: none;
+}
+
+.image-preview-mask {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 46px;
+  background: rgba(37, 29, 20, 0.76);
+  pointer-events: auto;
+}
+
+.image-preview-img {
+  max-width: min(88vw, 980px);
+  max-height: 82vh;
+  border: 6px solid rgba(255, 241, 208, 0.82);
+  border-radius: 10px;
+  object-fit: contain;
+  box-shadow: 0 24px 60px rgba(15, 10, 6, 0.52);
+  user-select: none;
+}
+
+.image-preview-close {
+  position: absolute;
+  top: 28px;
+  right: 30px;
+  width: 40px;
+  height: 40px;
+  border: 1px solid rgba(255, 241, 208, 0.5);
+  border-radius: 999px;
+  background: rgba(255, 248, 228, 0.92);
+  color: #4d3722;
+  cursor: pointer;
+  font-size: 28px;
+  line-height: 1;
 }
 
 .term-report-data-grid {
