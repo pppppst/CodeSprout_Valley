@@ -6,6 +6,7 @@ import { registerAccount, loginAccount, fetchCloudSave, syncCloudSave, uploadTer
 import WeatherEffect from './components/WeatherEffect.vue'
 import { useFloatingWindow } from './components/floatingWindow'
 import { SolarUtil } from 'lunar-javascript'
+import { bubbleMessages } from './bubbleMessages'
 
 const authUsername = ref('')
 const authPassword = ref('')
@@ -230,6 +231,19 @@ const codeLines = ref(150)
 const syncedCodeLines = ref(0)
 const catExp = ref(0)
 const message = ref('🐱 睡觉中...')
+const isBubbleShaking = ref(false)
+let lastBubbleIndex = -1
+function shakeBubble() {
+  if (isBubbleShaking.value) return
+  let idx
+  do {
+    idx = Math.floor(Math.random() * bubbleMessages.length)
+  } while (idx === lastBubbleIndex && bubbleMessages.length > 1)
+  lastBubbleIndex = idx
+  message.value = bubbleMessages[idx]
+  isBubbleShaking.value = true
+  setTimeout(() => { isBubbleShaking.value = false }, 400)
+}
 
 const feedCount = ref(0)
 const waterCount = ref(0)
@@ -1672,7 +1686,7 @@ onUnmounted(() => {
       </div>
 
       <div class="pet-area" style="-webkit-app-region: no-drag;">
-        <div v-if="!isFloatingMode" class="bubble" :style="{ top: bubbleTop }" @dblclick.stop="handleRestore">{{ message }}</div>
+        <div v-if="!isFloatingMode" class="bubble" :class="{ 'bubble-shake': isBubbleShaking }" :style="{ top: bubbleTop, zIndex: 5 }" @click.stop="shakeBubble" @dblclick.stop="handleRestore">{{ message }}</div>
         
         <div class="characters">
           <img
@@ -2530,17 +2544,27 @@ onUnmounted(() => {
   position: absolute;
   left: 43%;
   white-space: nowrap;
-  min-width: 120px;
-  transform: translate(-50%, -50%);
-  background: rgba(255, 255, 255, 0.95);
+  background: url('./assets/speech_bubble.png') no-repeat center;
+  background-size: 100% 100%;
   color: #333;
-  padding: 12px 20px;
-  border-radius: 20px;
+  padding: 35px 45px 25px;
   font-weight: bold;
-  font-size: 18px;
-  margin-bottom: 20px;
-  box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+  font-size: 14px;
   pointer-events: auto;
+  cursor: pointer;
+  transform: translate(-50%, calc(-50% - 60px)) scale(1.5);
+}
+
+.bubble-shake {
+  animation: bubbleShake 0.35s ease-in-out;
+}
+
+@keyframes bubbleShake {
+  0%, 100% { transform: translate(-50%, calc(-50% - 60px)) scale(1.5); }
+  20% { transform: translate(calc(-50% - 6px), calc(-50% - 60px)) scale(1.5); }
+  40% { transform: translate(calc(-50% + 6px), calc(-50% - 60px)) scale(1.5); }
+  60% { transform: translate(calc(-50% - 4px), calc(-50% - 60px)) scale(1.5); }
+  80% { transform: translate(calc(-50% + 4px), calc(-50% - 60px)) scale(1.5); }
 }
 
 .characters {
@@ -2556,7 +2580,7 @@ onUnmounted(() => {
 .cat-image {
   position: absolute;
   left: -15px;
-  bottom: 75px;
+  bottom: 95px;
   width: 250px;
   height: 250px;
   display: block;
@@ -2569,12 +2593,10 @@ onUnmounted(() => {
   will-change: transform; 
 }
 
-.cat-idle,
-.cat-stretching,
-.cat-jumping {
+.cat-idle {
   position: absolute;
   left: 25px;
-  bottom: 35px;
+  bottom: 55px;
   width: 170px;
   height: 170px;
   display: block;
@@ -2584,7 +2606,25 @@ onUnmounted(() => {
   transition: transform 0.2s;
   transform-origin: bottom center;
   cursor: grab;
-  will-change: transform; 
+  will-change: transform;
+}
+
+.cat-stretching,
+.cat-jumping {
+  position: absolute;
+  left: 25px;
+  bottom: 75px;
+  width: 170px;
+  height: 170px;
+  display: block;
+  object-fit: contain;
+  object-position: center bottom;
+  filter: drop-shadow(0px 10px 10px rgba(0,0,0,0.5));
+  transition: transform 0.2s;
+  transform: scale(1.1);
+  transform-origin: bottom center;
+  cursor: grab;
+  will-change: transform;
 }
 
 .cat-image:active {
