@@ -51,6 +51,24 @@ function hasBlockingDiagnostic(uri: vscode.Uri): boolean {
     });
 }
 
+function getDebugTargetDocument(): vscode.TextDocument | undefined {
+    const activeDocument = vscode.window.activeTextEditor?.document;
+
+    if (activeDocument && isTrackableCodeDocument(activeDocument)) {
+        return activeDocument;
+    }
+
+    const visibleDocument = vscode.window.visibleTextEditors
+        .map(editor => editor.document)
+        .find(isTrackableCodeDocument);
+
+    if (visibleDocument) {
+        return visibleDocument;
+    }
+
+    return vscode.workspace.textDocuments.find(isTrackableCodeDocument);
+}
+
 function scheduleDiagnosticReport(): void {
     if (reportTimeout) {
         clearTimeout(reportTimeout);
@@ -80,8 +98,14 @@ function flushDiagnosticReport(): void {
     }
 }
 
-async function onDocumentSaved(document: vscode.TextDocument): Promise<void> {
-    if (!isTrackableCodeDocument(document)) {
+async function onDebugSessionStarted(session: vscode.DebugSession): Promise<void> {
+    if (session.parentSession) {
+        return;
+    }
+
+    const document = getDebugTargetDocument();
+
+    if (!document) {
         return;
     }
 
@@ -101,8 +125,8 @@ export function activateErrorReporterTracker(context: vscode.ExtensionContext): 
     pendingPassCount = 0;
 
     context.subscriptions.push(
-        vscode.workspace.onDidSaveTextDocument(document => {
-            void onDocumentSaved(document);
+        vscode.debug.onDidStartDebugSession(session => {
+            void onDebugSessionStarted(session);
         })
     );
 }
