@@ -240,6 +240,11 @@ const todayPassed = ref(0)
 const todayErrors = ref(0)
 let offActivityUpdate = null
 const isStatsVisible = ref(true)
+const isSettingsPanelOpen = ref(false)
+const isCloudAccountPanelOpen = ref(false)
+const isUserProfilePanelOpen = ref(false)
+const userNickname = ref(localStorage.getItem('codeSproutNickname') || '')
+const userBirthday = ref(localStorage.getItem('codeSproutBirthday') || '')
 
 
 const CODE_LINES_PER_REWARD = 50
@@ -795,10 +800,39 @@ function openImagePreview(src, alt) {
 function closeImagePreview() {
   previewImage.value = null
 }
+
 function openSettings() {
-  message.value = '⚙️ 正在打开设置...'
-  resetCatState(2000)
+  isSettingsPanelOpen.value = true
 }
+
+function closeSettings() {
+  isSettingsPanelOpen.value = false
+  isCloudAccountPanelOpen.value = false
+}
+
+function openCloudAccountPanel() {
+  isCloudAccountPanelOpen.value = true
+}
+
+function closeCloudAccountPanel() {
+  isCloudAccountPanelOpen.value = false
+}
+
+function openUserProfilePanel() {
+  isUserProfilePanelOpen.value = true
+}
+
+function closeUserProfilePanel() {
+  isUserProfilePanelOpen.value = false
+}
+
+function saveUserProfile() {
+  localStorage.setItem('codeSproutNickname', userNickname.value)
+  localStorage.setItem('codeSproutBirthday', userBirthday.value)
+  alert('个人资料已保存')
+  closeUserProfilePanel()
+}
+
 function toggleStats() {
   isStatsVisible.value = !isStatsVisible.value
 }
@@ -1494,29 +1528,109 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div v-show="!isFloatingMode" class="cloud-panel" style="-webkit-app-region: no-drag;">
-    <div class="cloud-panel-title">云端账号</div>
+  <!-- 第一层：设置面板（背景遮罩 + 设置面板） -->
+  <div
+    v-if="isSettingsPanelOpen && !isFloatingMode"
+    class="settings-mask"
+    style="-webkit-app-region: no-drag;"
+    @click.self="closeSettings"
+  >
+    <div class="settings-panel" style="-webkit-app-region: no-drag;">
+      <div class="settings-panel-header">
+        <h2>设置</h2>
+        <button class="settings-panel-close" @click="closeSettings">×</button>
+      </div>
 
-    <div v-if="loggedInUser" class="cloud-user-card">
-      <div class="cloud-user-name">{{ loggedInUser }}</div>
-      <div class="cloud-user-meta">{{ lastSyncTime ? `最近同步：${lastSyncTime}` : '' }}</div>
-      <div class="cloud-actions">
-        <button class="cloud-btn primary" :disabled="isCloudBusy" @click="handleCloudSync">同步</button>
-        <button class="cloud-btn danger" :disabled="isCloudBusy" @click="handleLogout">退出</button>
+      <div class="settings-panel-content">
+        <button class="settings-menu-item" @click="openCloudAccountPanel">
+          <span class="settings-menu-icon">☁️</span>
+          <span class="settings-menu-label">云端账号</span>
+          <span class="settings-menu-arrow">→</span>
+        </button>
+        <button class="settings-menu-item" @click="openUserProfilePanel">
+          <span class="settings-menu-icon">👤</span>
+          <span class="settings-menu-label">个人资料</span>
+          <span class="settings-menu-arrow">→</span>
+        </button>
       </div>
     </div>
-
-    <div v-else class="cloud-login-form">
-      <input v-model.trim="authUsername" class="cloud-input" placeholder="用户名" />
-      <input v-model="authPassword" class="cloud-input" type="password" placeholder="密码（至少 6 位）" />
-      <div class="cloud-actions">
-        <button class="cloud-btn secondary" :disabled="isCloudBusy" @click="handleRegister">注册</button>
-        <button class="cloud-btn primary" :disabled="isCloudBusy" @click="handleLogin">登录</button>
-      </div>
-    </div>
-
-    <div class="cloud-status">{{ authStatusMessage }}</div>
   </div>
+
+  <!-- 第二层：云端账号面板 -->
+  <div
+    v-if="isCloudAccountPanelOpen && !isFloatingMode"
+    class="cloud-account-mask"
+    style="-webkit-app-region: no-drag;"
+    @click.self="closeCloudAccountPanel"
+  >
+    <div class="cloud-account-panel" style="-webkit-app-region: no-drag;">
+      <div class="cloud-account-header">
+        <button class="cloud-account-back" @click="closeCloudAccountPanel">← 返回</button>
+        <h2>云端账号</h2>
+        <div style="width: 40px;"></div>
+      </div>
+
+      <div class="cloud-account-content">
+        <div v-if="loggedInUser" class="cloud-user-card">
+          <div class="cloud-user-name">{{ loggedInUser }}</div>
+          <div class="cloud-user-meta">{{ lastSyncTime ? `最近同步：${lastSyncTime}` : '' }}</div>
+          <div class="cloud-actions">
+            <button class="cloud-btn primary" :disabled="isCloudBusy" @click="handleCloudSync">同步</button>
+            <button class="cloud-btn danger" :disabled="isCloudBusy" @click="handleLogout">退出</button>
+          </div>
+        </div>
+
+        <div v-else class="cloud-login-form">
+          <input v-model.trim="authUsername" class="cloud-input" placeholder="用户名" />
+          <input v-model="authPassword" class="cloud-input" type="password" placeholder="密码（至少 6 位）" />
+          <div class="cloud-actions">
+            <button class="cloud-btn secondary" :disabled="isCloudBusy" @click="handleRegister">注册</button>
+            <button class="cloud-btn primary" :disabled="isCloudBusy" @click="handleLogin">登录</button>
+          </div>
+        </div>
+
+        <div class="cloud-status">{{ authStatusMessage }}</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 第二层：个人资料面板 -->
+  <div
+    v-if="isUserProfilePanelOpen && !isFloatingMode"
+    class="user-profile-mask"
+    style="-webkit-app-region: no-drag;"
+    @click.self="closeUserProfilePanel"
+  >
+    <div class="user-profile-panel" style="-webkit-app-region: no-drag;">
+      <div class="user-profile-header">
+        <button class="user-profile-back" @click="closeUserProfilePanel">← 返回</button>
+        <h2>个人资料</h2>
+        <div style="width: 40px;"></div>
+      </div>
+
+      <div class="user-profile-content">
+        <div class="profile-form">
+          <div class="profile-field">
+            <label class="profile-label">昵称</label>
+            <input v-model.trim="userNickname" class="profile-input" type="text" placeholder="请输入你的昵称" maxlength="20" />
+            <span class="profile-hint">{{ userNickname.length }}/20</span>
+          </div>
+
+          <div class="profile-field">
+            <label class="profile-label">生日</label>
+            <input v-model="userBirthday" class="profile-input" type="date" />
+            <span class="profile-hint" v-if="userBirthday">{{ userBirthday }}</span>
+          </div>
+
+          <div class="profile-actions">
+            <button class="profile-btn cancel" @click="closeUserProfilePanel">取消</button>
+            <button class="profile-btn save" @click="saveUserProfile">保存</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div class="viewport-root" :class="{ 'floating-root': isFloatingMode }" :style="{ backgroundImage: `url(${currentBgUrl})` }">
     <WeatherEffect v-show="!isFloatingMode" :type="currentWeatherType" />
     <div 
@@ -1839,6 +1953,325 @@ onUnmounted(() => {
 .cloud-btn.secondary { background: #5b87b4; }
 .cloud-btn.danger { background: #b75b54; }
 .cloud-status { margin-top: 10px; padding: 8px; border-left: 3px solid #7ea56d; border-radius: 6px; background: rgba(239, 244, 229, 0.86); color: #4d5a45; font-size: 12px; line-height: 1.4; }
+
+/* ========== 设置面板样式 ========== */
+.settings-mask {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10000;
+}
+
+.settings-panel {
+  position: relative;
+  width: 400px;
+  background: rgba(250, 252, 242, 0.98);
+  border: 2px solid rgba(87, 124, 87, 0.35);
+  border-radius: 16px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+  padding: 0;
+  overflow: hidden;
+}
+
+.settings-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 20px 24px;
+  border-bottom: 1px solid rgba(87, 124, 87, 0.15);
+  background: linear-gradient(135deg, rgba(134, 212, 152, 0.1), rgba(141, 200, 157, 0.05));
+}
+
+.settings-panel-header h2 {
+  margin: 0;
+  color: #3f6d4a;
+  font-size: 24px;
+  font-weight: 600;
+}
+
+.settings-panel-close {
+  background: none;
+  border: none;
+  font-size: 28px;
+  color: #7b8f4f;
+  cursor: pointer;
+  padding: 0;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  transition: background 0.2s;
+}
+
+.settings-panel-close:hover {
+  background: rgba(87, 124, 87, 0.1);
+}
+
+.settings-panel-content {
+  padding: 16px;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.settings-menu-item {
+  width: 100%;
+  padding: 16px 18px;
+  background: rgba(255, 255, 255, 0.7);
+  border: 1px solid rgba(87, 124, 87, 0.2);
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-size: 16px;
+  color: #3f4a38;
+  margin-bottom: 10px;
+}
+
+.settings-menu-item:hover {
+  background: rgba(134, 212, 152, 0.15);
+  border-color: rgba(87, 124, 87, 0.3);
+  transform: translateX(4px);
+}
+
+.settings-menu-icon {
+  font-size: 20px;
+  width: 28px;
+  text-align: center;
+}
+
+.settings-menu-label {
+  flex: 1;
+  text-align: left;
+  font-weight: 500;
+}
+
+.settings-menu-arrow {
+  color: #7b8f4f;
+  font-size: 18px;
+}
+
+/* ========== 云端账号面板样式 ========== */
+.cloud-account-mask {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10001;
+}
+
+.cloud-account-panel {
+  position: relative;
+  width: 450px;
+  max-height: 70vh;
+  background: rgba(250, 252, 242, 0.98);
+  border: 2px solid rgba(87, 124, 87, 0.35);
+  border-radius: 16px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+  padding: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.cloud-account-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 20px 24px;
+  border-bottom: 1px solid rgba(87, 124, 87, 0.15);
+  background: linear-gradient(135deg, rgba(134, 212, 152, 0.1), rgba(141, 200, 157, 0.05));
+}
+
+.cloud-account-header h2 {
+  margin: 0;
+  color: #3f6d4a;
+  font-size: 22px;
+  font-weight: 600;
+  flex: 1;
+  text-align: center;
+}
+
+.cloud-account-back {
+  background: none;
+  border: none;
+  color: #4f8f5f;
+  cursor: pointer;
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 14px;
+  transition: background 0.2s;
+}
+
+.cloud-account-back:hover {
+  background: rgba(87, 124, 87, 0.15);
+}
+
+.cloud-account-content {
+  flex: 1;
+  padding: 20px;
+  overflow-y: auto;
+}
+
+/* ========== 个人资料面板样式 ========== */
+.user-profile-mask {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10001;
+}
+
+.user-profile-panel {
+  position: relative;
+  width: 450px;
+  max-height: 70vh;
+  background: rgba(250, 252, 242, 0.98);
+  border: 2px solid rgba(87, 124, 87, 0.35);
+  border-radius: 16px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+  padding: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.user-profile-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 20px 24px;
+  border-bottom: 1px solid rgba(87, 124, 87, 0.15);
+  background: linear-gradient(135deg, rgba(134, 212, 152, 0.1), rgba(141, 200, 157, 0.05));
+}
+
+.user-profile-header h2 {
+  margin: 0;
+  color: #3f6d4a;
+  font-size: 22px;
+  font-weight: 600;
+  flex: 1;
+  text-align: center;
+}
+
+.user-profile-back {
+  background: none;
+  border: none;
+  color: #4f8f5f;
+  cursor: pointer;
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 14px;
+  transition: background 0.2s;
+}
+
+.user-profile-back:hover {
+  background: rgba(87, 124, 87, 0.15);
+}
+
+.user-profile-content {
+  flex: 1;
+  padding: 24px;
+  overflow-y: auto;
+}
+
+.profile-form {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.profile-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.profile-label {
+  color: #3f6d4a;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.profile-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  border: 1px solid rgba(87, 124, 87, 0.3);
+  border-radius: 8px;
+  color: #344235;
+  background: rgba(255, 255, 255, 0.9);
+  font-size: 14px;
+  outline: none;
+  transition: border-color 0.2s, background 0.2s;
+}
+
+.profile-input:focus {
+  border-color: rgba(79, 143, 95, 0.6);
+  background: rgba(255, 255, 255, 1);
+}
+
+.profile-hint {
+  font-size: 12px;
+  color: #8a7658;
+}
+
+.profile-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.profile-btn {
+  flex: 1;
+  padding: 12px 16px;
+  border: 1px solid rgba(87, 124, 87, 0.3);
+  border-radius: 8px;
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-weight: 500;
+}
+
+.profile-btn.cancel {
+  background: rgba(255, 255, 255, 0.8);
+  color: #5a4630;
+}
+
+.profile-btn.cancel:hover {
+  background: rgba(255, 255, 255, 1);
+  border-color: rgba(87, 124, 87, 0.5);
+}
+
+.profile-btn.save {
+  background: #4f8f5f;
+  color: white;
+  border-color: #4f8f5f;
+}
+
+.profile-btn.save:hover {
+  background: #3f6f4a;
+  border-color: #3f6f4a;
+}
 
 .pet-container {
   --ui-bg: rgba(134, 212, 152, 0.88);
