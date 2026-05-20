@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { flushActivityBuffer, reportActivityToElectron } from './reportService';
+import { flushActivityBuffer, initializeReportService, reportActivityToElectron } from './reportService';
 import {
     activateCodeIncrementTracker,
     deactivateCodeIncrementTracker
@@ -16,6 +16,7 @@ import {
 export function activate(context: vscode.ExtensionContext): void {
     console.log('[CS Valley] Activity tracker plugin activated.');
 
+    initializeReportService(context);
     activateCodeIncrementTracker(context);
     activateErrorReporterTracker(context);
     activateCodingDurationTracker(context);
