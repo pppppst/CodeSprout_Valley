@@ -2,7 +2,7 @@
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { getActiveJieQi } from './utils/calendar'
 // 🌟 1. 引入所有新的云端接口
-import { registerAccount, loginAccount, fetchCloudSave, syncCloudSave, uploadTermDailyStat, fetchTermStats, saveTermReport, fetchHistoryReports } from './utils/cloudApi'
+import { registerAccount, loginAccount, fetchCloudSave, updateUserProfile, syncCloudSave, uploadTermDailyStat, fetchTermStats, saveTermReport, fetchHistoryReports } from './utils/cloudApi'
 import WeatherEffect from './components/WeatherEffect.vue'
 import { useFloatingWindow } from './components/floatingWindow'
 import { SolarUtil } from 'lunar-javascript'
@@ -14,6 +14,7 @@ const authStatusMessage = ref('等待登录后同步云端存档')
 const cloudToken = ref(localStorage.getItem('codeSproutToken') || '')
 const loggedInUser = ref(localStorage.getItem('codeSproutUser') || '')
 const isCloudBusy = ref(false)
+const isRestoringSession = ref(Boolean(cloudToken.value && loggedInUser.value))
 const lastSyncTime = ref(localStorage.getItem('codeSproutLastSyncTime') || '')
 const isArchiveOpen = ref(false)
 const hasNewHarvest = ref(false)
@@ -22,16 +23,77 @@ const selectedArchiveTermKey = ref('')
 const latestHarvestTermKey = ref('')
 const latestReportTermKey = ref('')
 const previewImage = ref(null)
+const isAuthenticated = computed(() => Boolean(cloudToken.value && loggedInUser.value && !isRestoringSession.value))
+const isAuthGateVisible = computed(() => !isAuthenticated.value)
+
+const PENDING_SYNC_STORAGE_PREFIX = 'codeSproutPendingSync'
+const LAST_SEEN_SOLAR_TERM_KEY = 'codeSproutLastSeenSolarTerm'
+const SETTLED_SOLAR_TERMS_KEY = 'codeSproutSettledSolarTerms2026'
+const SOLAR_TERM_REPORT_YEAR = 2026
+const AUTO_SYNC_INTERVAL_MS = 30000
+
+function normalizePendingSync(value) {
+  const codeLines = Math.max(0, Number(value?.codeLines || 0))
+  return {
+    codeLines,
+    commitCount: Math.max(0, Number(value?.commitCount || 0)),
+    errorCount: Math.max(0, Number(value?.errorCount || 0)),
+    archiveCodeLines: Math.max(0, Number(value?.archiveCodeLines ?? codeLines))
+  }
+}
+
+function getPendingSyncStorageKey(username = loggedInUser.value) {
+  return `${PENDING_SYNC_STORAGE_PREFIX}:${username || 'anonymous'}`
+}
+
+function loadPendingSyncFromStorage(username = loggedInUser.value) {
+  try {
+    const saved = localStorage.getItem(getPendingSyncStorageKey(username))
+    return normalizePendingSync(saved ? JSON.parse(saved) : {})
+  } catch {
+    return normalizePendingSync({})
+  }
+}
+
+function savePendingSyncToStorage() {
+  const normalized = normalizePendingSync(pendingSync.value)
+  if (normalized.codeLines === 0 && normalized.commitCount === 0 && normalized.errorCount === 0 && normalized.archiveCodeLines === 0) {
+    clearPendingSyncStorage()
+    return
+  }
+  localStorage.setItem(getPendingSyncStorageKey(), JSON.stringify(normalized))
+}
+
+function clearPendingSyncStorage(username = loggedInUser.value) {
+  localStorage.removeItem(getPendingSyncStorageKey(username))
+}
+
+function loadSettledSolarTerms() {
+  try {
+    const saved = localStorage.getItem(SETTLED_SOLAR_TERMS_KEY)
+    const parsed = saved ? JSON.parse(saved) : []
+    return Array.isArray(parsed) ? parsed.filter((name) => typeof name === 'string' && name.trim()) : []
+  } catch {
+    return []
+  }
+}
+
+function saveSettledSolarTerms() {
+  localStorage.setItem(SETTLED_SOLAR_TERMS_KEY, JSON.stringify(settledSolarTerms.value))
+}
 
 // ==========================================
 // 🌟 新增：自动同步缓冲池 (存钱罐)
 // ==========================================
-const pendingSync = ref({
-  codeLines: 0,
-  commitCount: 0,
-  errorCount: 0
-})
+const pendingSync = ref(loadPendingSyncFromStorage())
+const lastSeenSolarTerm = ref(localStorage.getItem(LAST_SEEN_SOLAR_TERM_KEY) || '')
+const settledSolarTerms = ref(loadSettledSolarTerms())
 let autoSyncTimer = null
+let autoSyncInFlight = false
+let hasAutoSyncFailure = false
+
+watch(pendingSync, savePendingSyncToStorage, { deep: true })
+watch(settledSolarTerms, saveSettledSolarTerms, { deep: true })
 
 function setAuthSession(token, username) {
   cloudToken.value = token
@@ -40,17 +102,29 @@ function setAuthSession(token, username) {
   localStorage.setItem('codeSproutUser', username)
 }
 
+function clearUserProfile() {
+  userNickname.value = ''
+  userBirthday.value = ''
+  localStorage.removeItem('codeSproutNickname')
+  localStorage.removeItem('codeSproutBirthday')
+}
+
 function clearAuthSession() {
   cloudToken.value = ''
   loggedInUser.value = ''
+  isRestoringSession.value = false
   lastSyncTime.value = ''
   localStorage.removeItem('codeSproutToken')
   localStorage.removeItem('codeSproutUser')
   localStorage.removeItem('codeSproutLastSyncTime')
+  clearUserProfile()
 }
 
 function applyCloudSave(save) {
   if (!save) return
+
+  if (typeof save.nickname === 'string') userNickname.value = save.nickname
+  if (typeof save.birthday === 'string') userBirthday.value = save.birthday
 
   const totalCodeLines = Number(save.totalCodeLines || 0)
   codeLines.value = totalCodeLines
@@ -69,6 +143,17 @@ async function loadCloudSave() {
 
   const result = await fetchCloudSave(cloudToken.value)
   applyCloudSave(result.data)
+}
+
+async function fetchLatestActivitySnapshot() {
+  if (!isAuthenticated.value || !window.api?.getLatestActivity) return
+
+  try {
+    const data = await window.api.getLatestActivity()
+    applyActivityUpdate(data)
+  } catch (err) {
+    console.error('[CS Valley]', err)
+  }
 }
 
 async function handleRegister() {
@@ -100,8 +185,10 @@ async function handleLogin() {
   try {
     const result = await loginAccount(authUsername.value.trim(), authPassword.value)
     setAuthSession(result.token, result.username)
+    pendingSync.value = loadPendingSyncFromStorage(result.username)
     applyCloudSave(result.data)
     await loadCloudSave()
+    isRestoringSession.value = false
     authStatusMessage.value = '登录成功，云端存档已加载'
   } catch (error) {
     clearAuthSession()
@@ -146,21 +233,24 @@ async function handleCloudSync() {
 // ==========================================
 async function processAutoSync() {
   // 未登录时不自动上传云端，但本地数据仍正常累计
-  if (!cloudToken.value) return 
+  if (!isAuthenticated.value) return
+  if (autoSyncInFlight) return
 
   const hasPendingStats = pendingSync.value.codeLines > 0 || pendingSync.value.commitCount > 0 || pendingSync.value.errorCount > 0
-  const linesToSync = Math.max(0, codeLines.value - syncedCodeLines.value)
+  const archiveCodeLines = Math.max(0, Number(pendingSync.value.archiveCodeLines || 0))
   
+  autoSyncInFlight = true
   try {
     // 1. 🌟 修复：无条件同步总资产！这样你的喂猫、浇水等物资变化都会每 30 秒上云，并且刷新界面的同步时间。
     const archivePayload = {
-      addedLines: linesToSync,
+      addedLines: archiveCodeLines,
       catFood: foodStock.value,
       waterDrops: waterStock.value,
       plantStage: currentPlantStage.value
     }
     const syncResult = await syncCloudSave(cloudToken.value, archivePayload)
     applyCloudSave(syncResult.data) // 这行会让界面的“最近同步时间”刷新！
+    pendingSync.value.archiveCodeLines = 0
 
     // 2. 再上传当天的节气增量统计数据（只有有数据时才上传这部分）
     if (hasPendingStats) {
@@ -178,16 +268,27 @@ async function processAutoSync() {
       pendingSync.value.codeLines = 0
       pendingSync.value.commitCount = 0
       pendingSync.value.errorCount = 0
+      pendingSync.value.archiveCodeLines = 0
+      clearPendingSyncStorage()
     }
+    if (hasAutoSyncFailure) {
+      authStatusMessage.value = '自动同步已恢复，暂存数据已补传'
+    }
+    hasAutoSyncFailure = false
   } catch (error) {
     console.warn('[CS Valley] 自动同步失败，数据已暂存本地，等待下一次重试:', error)
+    hasAutoSyncFailure = true
+    authStatusMessage.value = '自动同步暂时失败，数据已保存在本地，将继续重试。'
     if (error.status === 401) {
       clearAuthSession() // 如果 Token 过期，自动退出登录
     }
+  } finally {
+    autoSyncInFlight = false
   }
 }
 
 function handleLogout() {
+  clearPendingSyncStorage()
   clearAuthSession()
   authUsername.value = ''
   authPassword.value = ''
@@ -205,6 +306,11 @@ function handleLogout() {
   selectedArchiveTermKey.value = ''
   latestHarvestTermKey.value = ''
   latestReportTermKey.value = ''
+  pendingSync.value = { codeLines: 0, commitCount: 0, errorCount: 0, archiveCodeLines: 0 }
+  isSettingsPanelOpen.value = false
+  isCloudAccountPanelOpen.value = false
+  isUserProfilePanelOpen.value = false
+  isArchiveOpen.value = false
 
   authStatusMessage.value = '已退出登录，本地账号状态已彻底清空'
 }
@@ -257,8 +363,8 @@ const isStatsVisible = ref(true)
 const isSettingsPanelOpen = ref(false)
 const isCloudAccountPanelOpen = ref(false)
 const isUserProfilePanelOpen = ref(false)
-const userNickname = ref(localStorage.getItem('codeSproutNickname') || '')
-const userBirthday = ref(localStorage.getItem('codeSproutBirthday') || '')
+const userNickname = ref('')
+const userBirthday = ref('')
 
 
 const CODE_LINES_PER_REWARD = 50
@@ -483,7 +589,7 @@ function stopPeriodicTimer() {
 // 获取今天日期的字符串格式
 function getTodayString() {
   const d = new Date()
-  return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
 const lastFedDate = ref(localStorage.getItem('cs_valley_last_fed_date') || '')
@@ -591,12 +697,14 @@ function resetToday() {
 // 4. 插件数据更新监听 (🌟 接入缓冲池)
 // ==========================================
 function applyActivityUpdate(data) {
+  if (!isAuthenticated.value) return
   if (!data || typeof data !== 'object') return
   if (isSandboxActive.value) return
 
-  if (typeof data.codeAdded === 'number' && Number.isFinite(data.codeAdded)) {
+  if (typeof data.codeAdded === 'number' && Number.isFinite(data.codeAdded) && data.codeAdded > 0) {
     codeLines.value = Math.max(0, codeLines.value + data.codeAdded)
     pendingSync.value.codeLines += data.codeAdded // 🌟 存入缓冲池
+    pendingSync.value.archiveCodeLines = Math.max(0, Number(pendingSync.value.archiveCodeLines || 0)) + data.codeAdded
   }
 
   if (typeof data.codePassed === 'number' && Number.isFinite(data.codePassed) && data.codePassed > 0) {
@@ -687,7 +795,7 @@ async function openArchive() {
               totalCodeLines: displayCodeLines, // 👈 使用修复后的数值
               todayPassed: report.totalCommitCount,
               todayErrors: report.totalErrorCount,
-              passRate: (report.totalCommitCount + report.totalErrorCount === 0) ? '暂无' : `${Math.round((report.totalCommitCount / (report.totalCommitCount + report.totalErrorCount)) * 100)}%`,
+              passRate: formatPassRate(report.totalCommitCount, report.totalErrorCount),
               totalActions: '已归档',
               plantStage: report.harvestTier && Number.isFinite(Number(report.plantStage)) ? Number(report.plantStage) : '已归档',
               syncText: '☁️ 云端永久快照',
@@ -729,11 +837,26 @@ async function generateAndSaveCloudReport() {
     return
   }
 
-  // 强制只使用系统当前的真实节气
-  const termName = currentSolarTerm.value || '未知'
-  
-  if (selectedArchiveTerm.value && selectedArchiveTerm.value.name !== termName) {
-    message.value = `⚠️ 只能生成当前节气【${termName}】的报告！`
+  const selectedTerm = selectedArchiveTerm.value
+  if (!selectedTerm) {
+    message.value = '⚠️ 请先在节气档案中选择一个节气。'
+    resetCatState(3000)
+    return
+  }
+
+  const termName = selectedTerm.name
+  const termKey = selectedTerm.key
+
+  if (selectedArchiveReportRecord.value) {
+    message.value = `📖 ${termName} 的节气报告已经生成，可以直接查看。`
+    resetCatState(3000)
+    return
+  }
+
+  if (!isSolarTermEndedForReport(termName)) {
+    message.value = selectedArchiveIsCurrentTerm.value
+      ? '当前节气还在生长中，还未生成节气报告。'
+      : `${termName} 还未进入结算时间，还未生成节气报告。`
     resetCatState(3000)
     return
   }
@@ -745,33 +868,27 @@ async function generateAndSaveCloudReport() {
     if (!statsRes.success) throw new Error(statsRes.message)
 
     const data = statsRes.data
-    let summaryText = ''
-    
-    // 🌟 智能识别文案：如果是直接修改数据库总资产导致的 0 增量
-    if (data.totalCodeLines === 0 && codeLines.value > 0) {
-        summaryText = `${termName}节气已结算。由于近期直接同步了云端总存档，本节气期间没有计入增量代码。您目前的云端总代码资产为 ${codeLines.value} 行，继续加油哦！`
-    } else {
-        summaryText = `${termName}节气已结算。云端记录显示：本节气期间累计编写代码 ${data.totalCodeLines} 行，提交 ${data.totalCommitCount} 次，发生报错 ${data.totalErrorCount} 次。`
-    }
+    const passRate = formatPassRate(data.totalCommitCount, data.totalErrorCount)
+    const summaryText = `${SOLAR_TERM_REPORT_YEAR} 年${termName}节气已结算。云端记录显示：本节气期间累计编写代码 ${data.totalCodeLines} 行，通过/提交 ${data.totalCommitCount} 次，发生报错 ${data.totalErrorCount} 次，通过率 ${passRate}。`
 
-    const stage = currentPlantStage.value
+    const stage = selectedArchiveHarvestRecord.value?.stage || getPlantStageByWaterings(plantWaterByTerm.value[termKey] || 0)
     const tier = getHarvestTierByStage(stage)
     const harvestStage = getHarvestStageByPlantStage(stage)
+    const harvestItemName = getHarvestPlantName(termName, termKey)
+    const period = getSolarTermPeriod2026(termName)
     const reportPayload = {
       solarTerm: termName,
-      periodStart: getTodayString(),
-      periodEnd: getTodayString(),
+      periodStart: period.start,
+      periodEnd: period.end,
       summary: summaryText,
       plantStage: stage,
       harvestStage,
       harvestTier: tier,
-      harvestItemName: harvestCopy[tier].itemName
+      harvestItemName
     }
 
     const saveResult = await saveTermReport(cloudToken.value, reportPayload)
-    const termKey = solarTermMap[termName] || currentTermPinyin.value
     const savedReport = saveResult.data || reportPayload
-    saveHarvestRecord(buildHarvestRecord(termName, termKey, stage))
     saveReportRecord({
       termName,
       termKey,
@@ -781,13 +898,12 @@ async function generateAndSaveCloudReport() {
       totalCodeLines: savedReport.totalCodeLines ?? data.totalCodeLines,
       todayPassed: savedReport.totalCommitCount ?? data.totalCommitCount,
       todayErrors: savedReport.totalErrorCount ?? data.totalErrorCount,
-      passRate: (data.totalCommitCount + data.totalErrorCount === 0) ? '暂无' : `${Math.round((data.totalCommitCount / (data.totalCommitCount + data.totalErrorCount)) * 100)}%`,
+      passRate: formatPassRate(savedReport.totalCommitCount ?? data.totalCommitCount, savedReport.totalErrorCount ?? data.totalErrorCount),
       totalActions: '已归档',
       plantStage: stage,
       syncText: '☁️ 云端永久快照',
       summary: summaryText
     })
-    latestHarvestTermKey.value = termKey
     latestReportTermKey.value = termKey
 
     message.value = `✨ ${termName} 云端报告已永久保存！`
@@ -840,11 +956,27 @@ function closeUserProfilePanel() {
   isUserProfilePanelOpen.value = false
 }
 
-function saveUserProfile() {
-  localStorage.setItem('codeSproutNickname', userNickname.value)
-  localStorage.setItem('codeSproutBirthday', userBirthday.value)
-  alert('个人资料已保存')
-  closeUserProfilePanel()
+async function saveUserProfile() {
+  if (!cloudToken.value) {
+    authStatusMessage.value = '请先登录账号再保存个人资料'
+    return
+  }
+
+  isCloudBusy.value = true
+  try {
+    const result = await updateUserProfile(cloudToken.value, {
+      nickname: userNickname.value,
+      birthday: userBirthday.value
+    })
+    applyCloudSave(result.data)
+    authStatusMessage.value = '个人资料已保存'
+    closeUserProfilePanel()
+  } catch (error) {
+    if (error.status === 401) clearAuthSession()
+    authStatusMessage.value = `个人资料保存失败：${error.message}`
+  } finally {
+    isCloudBusy.value = false
+  }
 }
 
 function toggleStats() {
@@ -901,6 +1033,92 @@ const solarTermMap = {
 }
 const solarTermNames = Object.keys(solarTermMap)
 const solarTermEntries = solarTermNames.map((name) => ({ name, key: solarTermMap[name] }))
+
+function formatDateForApi(date) {
+  return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`
+}
+
+function formatPassRate(passCount, errorCount) {
+  const passed = Math.max(0, Number(passCount || 0))
+  const errors = Math.max(0, Number(errorCount || 0))
+  const total = passed + errors
+  if (total === 0) return '暂无检测记录'
+  return `${Math.round((passed / total) * 100)}%`
+}
+
+function buildSolarTermTimeline2026() {
+  const timeline = []
+  let previousTerm = ''
+  for (let month = 0; month < 12; month++) {
+    const days = SolarUtil.getDaysOfMonth(SOLAR_TERM_REPORT_YEAR, month + 1)
+    for (let day = 1; day <= days; day++) {
+      const date = makeLocalDate(SOLAR_TERM_REPORT_YEAR, month + 1, day)
+      const termName = getSolarTermNameForDate(date)
+      if (!termName || termName === previousTerm || !solarTermMap[termName]) continue
+      timeline.push({
+        name: termName,
+        key: solarTermMap[termName],
+        startDate: date
+      })
+      previousTerm = termName
+    }
+  }
+  if (
+    timeline[0] &&
+    timeline[0].startDate.getMonth() === 0 &&
+    timeline[0].startDate.getDate() === 1
+  ) {
+    timeline.shift()
+  }
+  return timeline
+}
+
+const solarTermTimeline2026 = buildSolarTermTimeline2026()
+
+function getSolarTermTimelineIndex(termName) {
+  return solarTermTimeline2026.findIndex((entry) => entry.name === termName)
+}
+
+function getCurrentTimelineIndex() {
+  const currentDateValue = isValidDateObj(effectiveDate.value) ? effectiveDate.value : now.value
+  if (currentDateValue.getFullYear() !== SOLAR_TERM_REPORT_YEAR) return -1
+  return getSolarTermTimelineIndex(currentSolarTerm.value)
+}
+
+function getSolarTermPeriod2026(termName) {
+  const index = getSolarTermTimelineIndex(termName)
+  if (index < 0) return { start: getTodayString(), end: getTodayString() }
+  const startDate = solarTermTimeline2026[index].startDate
+  const nextStartDate = solarTermTimeline2026[index + 1]?.startDate
+  const endDate = nextStartDate
+    ? makeLocalDate(nextStartDate.getFullYear(), nextStartDate.getMonth() + 1, nextStartDate.getDate() - 1)
+    : makeLocalDate(SOLAR_TERM_REPORT_YEAR, 12, 31)
+  return { start: formatDateForApi(startDate), end: formatDateForApi(endDate) }
+}
+
+function isSolarTermEndedForReport(termName) {
+  const selectedIndex = getSolarTermTimelineIndex(termName)
+  const currentIndex = getCurrentTimelineIndex()
+  if (selectedIndex < 0 || currentIndex < 0) return false
+  return currentIndex > selectedIndex || settledSolarTerms.value.includes(termName)
+}
+
+function markSolarTermSettled(termName) {
+  if (!termName || !solarTermMap[termName] || settledSolarTerms.value.includes(termName)) return
+  settledSolarTerms.value = [...settledSolarTerms.value, termName]
+}
+
+function checkSolarTermTransition() {
+  const termName = currentSolarTerm.value
+  if (!termName) return
+
+  if (lastSeenSolarTerm.value && lastSeenSolarTerm.value !== termName) {
+    markSolarTermSettled(lastSeenSolarTerm.value)
+  }
+
+  lastSeenSolarTerm.value = termName
+  localStorage.setItem(LAST_SEEN_SOLAR_TERM_KEY, termName)
+}
 
 function getDefaultArchiveTermKey() {
   if (
@@ -961,19 +1179,31 @@ const harvestTierRank = {
   mature: 2,
   premium: 3
 }
-const harvestCopy = {
-  seedling: {
-    itemName: '节气小苗',
-    message: '这是你收获的节气小苗，继续加油！'
-  },
-  mature: {
-    itemName: '成熟花果',
-    message: '这是你收获的成熟花果，很棒哦！'
-  },
-  premium: {
-    itemName: '漂亮花果',
-    message: '这是你收获的漂亮花果，太棒啦！'
-  }
+const solarTermPlantMap = {
+  '立春': '迎春花',
+  '雨水': '杏花',
+  '惊蛰': '月季',
+  '春分': '梨花',
+  '清明': '泡桐',
+  '谷雨': '牡丹',
+  '立夏': '小麦',
+  '小满': '虞美人',
+  '芒种': '栀子花',
+  '夏至': '南瓜',
+  '小暑': '芭蕉',
+  '大暑': '凤仙花',
+  '立秋': '蓝雪花',
+  '处暑': '玉簪',
+  '白露': '昙花',
+  '秋分': '菊花',
+  '寒露': '桂花',
+  '霜降': '桔梗',
+  '立冬': '一品红',
+  '小雪': '茶花',
+  '大雪': '仙客来',
+  '冬至': '腊梅',
+  '小寒': '水仙',
+  '大寒': '兰花'
 }
 const harvestRecords = ref({})
 const reportRecords = ref({})
@@ -999,6 +1229,14 @@ function getPlantStageByWaterings(waterings) {
   return 1
 }
 
+function getMinimumWateringsForPlantStage(stage) {
+  const targetStage = Math.max(1, Math.min(4, Number(stage) || 1))
+  for (let waterings = 0; waterings <= MAX_WATERINGS_PER_TERM; waterings++) {
+    if (getPlantStageByWaterings(waterings) >= targetStage) return waterings
+  }
+  return MAX_WATERINGS_PER_TERM
+}
+
 function getHarvestTierByStage(stage) {
   if (stage >= 4) return 'premium'
   if (stage >= 3) return 'mature'
@@ -1009,6 +1247,23 @@ function getHarvestStageByPlantStage(stage) {
   if (stage >= 4) return 3
   if (stage >= 3) return 2
   return 1
+}
+
+function getHarvestPlantName(termName, termKey) {
+  const normalizedTermName = String(termName || '').trim()
+  const termFromKey = solarTermEntries.find((entry) => entry.key === termKey)
+  return solarTermPlantMap[normalizedTermName] || solarTermPlantMap[termFromKey?.name] || '节气花果'
+}
+
+function getHarvestStageMessage(stage) {
+  const safeStage = Math.max(1, Math.min(4, Number(stage) || 1))
+  if (safeStage >= 4) return '这次代码量非常亮眼，像把整个节气都照亮了。真的很棒！'
+  if (safeStage >= 3) return '代码量不错，这次积累很扎实，能看见你认真推进的节奏。辛苦啦，继续保持。'
+  return '这次代码积累还在发芽期，已经留下了开始的痕迹。慢慢来，下一次会长得更稳。'
+}
+
+function buildHarvestMessage(plantName, stage) {
+  return `这是你收获的${plantName}！${getHarvestStageMessage(stage)}`
 }
 
 function getHarvestImageUrlByHarvestStage(termKey, harvestStage) {
@@ -1031,16 +1286,17 @@ function buildHarvestRecordFromReport(report, termKey) {
   const term = solarTermEntries.find((entry) => entry.key === termKey)
   const plantStage = Math.max(1, Math.min(4, Number(report.plantStage) || 1))
   const harvestStage = Math.max(1, Math.min(3, Number(report.harvestStage) || getHarvestStageByPlantStage(plantStage)))
-  const itemName = String(report.harvestItemName || harvestCopy[tier].itemName)
+  const termName = term?.name || String(report.solarTerm || '')
+  const itemName = getHarvestPlantName(termName, termKey)
 
   return {
-    termName: term?.name || String(report.solarTerm || ''),
+    termName,
     termKey,
     stage: plantStage,
     tier,
     itemName,
     image: getHarvestImageUrlByHarvestStage(termKey, harvestStage),
-    message: harvestCopy[tier].message
+    message: buildHarvestMessage(itemName, plantStage)
   }
 }
 
@@ -1064,6 +1320,10 @@ const selectedArchiveReportRecord = computed(() => {
 })
 
 const selectedArchiveHasRecord = computed(() => {
+  return Boolean(selectedArchiveHarvestRecord.value)
+})
+
+const selectedArchiveHasArchiveContent = computed(() => {
   return Boolean(selectedArchiveHarvestRecord.value || selectedArchiveReportRecord.value)
 })
 
@@ -1071,12 +1331,16 @@ const selectedArchiveIsCurrentTerm = computed(() => {
   return Boolean(selectedArchiveTerm.value && selectedArchiveTerm.value.name === currentSolarTerm.value)
 })
 
+const selectedArchiveIsEndedForReport = computed(() => {
+  return Boolean(selectedArchiveTerm.value && isSolarTermEndedForReport(selectedArchiveTerm.value.name))
+})
+
 const canGenerateSelectedTermReport = computed(() => {
-  return Boolean(cloudToken.value && selectedArchiveIsCurrentTerm.value)
+  return Boolean(cloudToken.value && selectedArchiveTerm.value && !selectedArchiveReportRecord.value && selectedArchiveIsEndedForReport.value)
 })
 
 const selectedArchiveSolarTermImage = computed(() => {
-  if (!selectedArchiveTerm.value || (!selectedArchiveHasRecord.value && !selectedArchiveIsCurrentTerm.value)) return ''
+  if (!selectedArchiveTerm.value || (!selectedArchiveHasArchiveContent.value && !selectedArchiveIsCurrentTerm.value)) return ''
   return solarTermImageModules[`./assets/SolarTerm/${selectedArchiveTerm.value.key}.png`] || ''
 })
 
@@ -1237,7 +1501,7 @@ const isTimeMachineOpen = ref(false)
 const tmYear = ref('')
 const tmMonth = ref('')
 const tmDay = ref('')
-const tmSettlementWaterings = ref(0)
+const tmSettlementStage = ref(1)
 const timeMachineError = ref('')
 const tmYearInputEl = ref(null)
 const sandboxSnapshot = ref(null)
@@ -1366,7 +1630,7 @@ function applyTimeMachine() {
   waterCount.value = 0
   todayPassed.value = 0
   todayErrors.value = 0
-  plantWaterByTerm.value = { [termKey]: Number(tmSettlementWaterings.value) || 0 }
+  plantWaterByTerm.value = { [termKey]: getMinimumWateringsForPlantStage(tmSettlementStage.value) }
   isTimeMachineOpen.value = false
   timeMachineError.value = ''
   message.value = `⏳ 沙盘生效！前往 ${mockDateString.value}`
@@ -1375,14 +1639,15 @@ function applyTimeMachine() {
 
 function buildHarvestRecord(termName, termKey, stage) {
   const tier = getHarvestTierByStage(stage)
+  const itemName = getHarvestPlantName(termName, termKey)
   return {
     termName,
     termKey,
     stage,
     tier,
-    itemName: harvestCopy[tier].itemName,
+    itemName,
     image: getHarvestImageUrl(termKey, stage),
-    message: harvestCopy[tier].message
+    message: buildHarvestMessage(itemName, stage)
   }
 }
 
@@ -1413,8 +1678,8 @@ function simulateTermSettlement() {
   const settledDate = parsed.date
   const settledTermName = getSolarTermNameForDate(settledDate) || '当前节气'
   const settledTermKey = solarTermMap[settledTermName] || getTermPinyinForDate(settledDate)
-  const waterings = Number(tmSettlementWaterings.value) || 0
-  const stage = getPlantStageByWaterings(waterings)
+  const stage = Math.max(1, Math.min(4, Number(tmSettlementStage.value) || 1))
+  const waterings = getMinimumWateringsForPlantStage(stage)
   const totalActions = feedCount.value + waterings
   const record = saveHarvestRecord(buildHarvestRecord(settledTermName, settledTermKey, stage))
   const nextTermDate = getNextTermDate(settledDate, settledTermName)
@@ -1481,19 +1746,19 @@ onMounted(() => {
     offActivityUpdate = window.api.onActivityUpdate(applyActivityUpdate)
   }
 
-  if (window.api?.getLatestActivity) {
-    window.api.getLatestActivity().then(applyActivityUpdate).catch(err => console.error('[CS Valley]', err))
-  }
-
   if (cloudToken.value) {
     loadCloudSave()
       .then(() => {
+        isRestoringSession.value = false
         authStatusMessage.value = '已恢复登录状态，云端存档已加载'
+        fetchLatestActivitySnapshot()
       })
       .catch((error) => {
         clearAuthSession()
         authStatusMessage.value = `登录状态失效：${error.message}`
       })
+  } else {
+    clearUserProfile()
   }
   
   updateUiScale()
@@ -1501,9 +1766,11 @@ onMounted(() => {
 
   // 初始化时校验跨日状态
   restoreBaseCatState()
+  checkSolarTermTransition()
 
   timerId = setInterval(() => {
     now.value = new Date()
+    checkSolarTermTransition()
 
     // 跨日重置逻辑：每分钟检查一次，发现是第二天则清除状态
     const todayStr = getTodayString()
@@ -1518,7 +1785,8 @@ onMounted(() => {
   }, 60000)
 
   // 🌟 挂载 30 秒自动同步定时器
-  autoSyncTimer = setInterval(processAutoSync, 30000)
+  autoSyncTimer = setInterval(processAutoSync, AUTO_SYNC_INTERVAL_MS)
+  processAutoSync()
 })
 
 onUnmounted(() => {
@@ -1542,6 +1810,32 @@ onUnmounted(() => {
 </script>
 
 <template>
+  <div
+    v-if="isAuthGateVisible"
+    class="auth-gate"
+    style="-webkit-app-region: no-drag;"
+  >
+    <section class="auth-gate-panel">
+      <div class="auth-gate-brand">CodeSprout Valley</div>
+      <h1>{{ isRestoringSession ? '正在唤醒云端花园' : '先登录，再开始种植' }}</h1>
+      <p>
+        {{ isRestoringSession ? '正在确认账号状态，请稍等片刻。' : '代码统计、猫粮和节气档案会绑定到你的云端账号。登录后再开始，数据就不会散落在本地。' }}
+      </p>
+
+      <div v-if="!isRestoringSession" class="auth-gate-form">
+        <input v-model.trim="authUsername" class="cloud-input auth-gate-input" placeholder="用户名" />
+        <input v-model="authPassword" class="cloud-input auth-gate-input" type="password" placeholder="密码（至少 6 位）" />
+        <div class="auth-gate-actions">
+          <button class="cloud-btn secondary" :disabled="isCloudBusy" @click="handleRegister">注册</button>
+          <button class="cloud-btn primary" :disabled="isCloudBusy" @click="handleLogin">登录</button>
+        </div>
+      </div>
+
+      <div class="cloud-status auth-gate-status">{{ authStatusMessage }}</div>
+    </section>
+  </div>
+
+  <div v-else class="authenticated-shell">
   <!-- 第一层：设置面板（背景遮罩 + 设置面板） -->
   <div
     v-if="isSettingsPanelOpen && !isFloatingMode"
@@ -1588,8 +1882,8 @@ onUnmounted(() => {
         <div v-if="loggedInUser" class="cloud-user-card">
           <div class="cloud-user-name">{{ loggedInUser }}</div>
           <div class="cloud-user-meta">{{ lastSyncTime ? `最近同步：${lastSyncTime}` : '' }}</div>
+          <div class="cloud-user-meta">自动同步已开启，每 30 秒保存一次云端进度</div>
           <div class="cloud-actions">
-            <button class="cloud-btn primary" :disabled="isCloudBusy" @click="handleCloudSync">同步</button>
             <button class="cloud-btn danger" :disabled="isCloudBusy" @click="handleLogout">退出</button>
           </div>
         </div>
@@ -1638,7 +1932,7 @@ onUnmounted(() => {
 
           <div class="profile-actions">
             <button class="profile-btn cancel" @click="closeUserProfilePanel">取消</button>
-            <button class="profile-btn save" @click="saveUserProfile">保存</button>
+            <button class="profile-btn save" :disabled="isCloudBusy" @click="saveUserProfile">保存</button>
           </div>
         </div>
       </div>
@@ -1769,8 +2063,9 @@ onUnmounted(() => {
               <p class="archive-status-copy">
                 <span v-if="selectedArchiveHarvestRecord && selectedArchiveReportRecord">图鉴收获与节气报告已归档</span>
                 <span v-else-if="selectedArchiveHarvestRecord">已收获果实，暂未生成节气报告</span>
-                <span v-else-if="selectedArchiveReportRecord">已生成节气报告，暂未收获果实</span>
-                <span v-else>这个节气还没有归档内容</span>
+                <span v-else-if="selectedArchiveReportRecord">已有节气报告，收获果实后会点亮图鉴</span>
+                <span v-else-if="selectedArchiveIsCurrentTerm">这个节气还在生长中</span>
+                <span v-else>这段节气旅程还没有留下收获</span>
               </p>
 
               <div class="archive-detail-scroll">
@@ -1798,9 +2093,9 @@ onUnmounted(() => {
                     第 {{ selectedArchiveHarvestRecord.stage }} 阶段 · {{ selectedArchiveHarvestRecord.itemName }}
                   </p>
                   <p v-if="selectedArchiveHarvestRecord" class="harvest-detail-copy">{{ selectedArchiveHarvestRecord.message }}</p>
-                  <p v-else-if="selectedArchiveReportRecord" class="archive-empty-copy">这个节气暂无果实图鉴记录。</p>
-                  <p v-else-if="selectedArchiveIsCurrentTerm" class="archive-empty-copy">这个节气还没有收获，完成一次沙盘结算后，果实会来到这里。</p>
-                  <p v-else class="archive-empty-copy">尚未经历这个节气，暂无图鉴。</p>
+                  <p v-else-if="selectedArchiveReportRecord" class="archive-empty-copy">这个节气已有报告记录；等收获果实后，图鉴会正式点亮。</p>
+                  <p v-else-if="selectedArchiveIsCurrentTerm" class="archive-empty-copy">这个节气还在生长中，完成一次节气结算并收获果实后，果实会来到这里。</p>
+                  <p v-else class="archive-empty-copy">这段节气旅程还没有留下收获，等未来经历并结算后，档案会在这里展开。</p>
                 </section>
 
                 <section class="archive-section archive-report-section">
@@ -1814,20 +2109,24 @@ onUnmounted(() => {
                   <div v-else class="archive-empty-action" style="margin-top: 15px;">
                     <p class="archive-empty-copy">暂无节气报告。</p>
                     
-                    <button v-if="canGenerateSelectedTermReport" class="cloud-btn primary" style="width: 100%; margin-top: 10px; padding: 12px; font-weight: bold; background: #4f8f5f;" @click="generateAndSaveCloudReport">
-                      📊 生成【{{ currentSolarTerm }}】云端报告
+                    <button v-if="cloudToken && selectedArchiveTerm" class="cloud-btn primary" style="width: 100%; margin-top: 10px; padding: 12px; font-weight: bold; background: #4f8f5f;" @click="generateAndSaveCloudReport">
+                      📊 生成【{{ selectedArchiveTerm.name }}】节气报告
                     </button>
                     
-                    <p v-else-if="selectedArchiveIsCurrentTerm" class="archive-empty-copy" style="font-size: 12px; color: #8a7658; margin-top: 5px;">
+                    <p v-if="selectedArchiveIsCurrentTerm" class="archive-empty-copy" style="font-size: 12px; color: #8a7658; margin-top: 5px;">
+                      (当前节气还在生长中，还未生成节气报告)
+                    </p>
+
+                    <p v-else-if="!cloudToken" class="archive-empty-copy" style="font-size: 12px; color: #8a7658; margin-top: 5px;">
                       (请先登录以生成云端报告)
                     </p>
 
-                    <p v-else-if="selectedArchiveHasRecord" class="archive-empty-copy" style="font-size: 12px; color: #8a7658; margin-top: 5px;">
-                      (这个节气已有图鉴记录，暂未生成节气报告)
+                    <p v-else-if="selectedArchiveIsEndedForReport" class="archive-empty-copy" style="font-size: 12px; color: #8a7658; margin-top: 5px;">
+                      (该节气已结束，可手动生成云端报告)
                     </p>
 
                     <p v-else class="archive-empty-copy" style="font-size: 12px; color: #8a7658; margin-top: 5px;">
-                      (尚未经历这个节气，暂无历史报告)
+                      (该节气还未进入结算时间)
                     </p>
                   </div>
                   <div
@@ -1853,8 +2152,8 @@ onUnmounted(() => {
                   <div v-if="selectedArchiveReportRecord" class="term-report-data-grid">
                     <div class="term-report-data-item"><span>累计代码</span><strong>{{ selectedArchiveReportRecord.totalCodeLines }}</strong></div>
                     <div class="term-report-data-item"><span>通过率</span><strong>{{ selectedArchiveReportRecord.passRate }}</strong></div>
-                    <div class="term-report-data-item"><span>今日通过</span><strong>{{ selectedArchiveReportRecord.todayPassed }}</strong></div>
-                    <div class="term-report-data-item"><span>今日报错</span><strong>{{ selectedArchiveReportRecord.todayErrors }}</strong></div>
+                    <div class="term-report-data-item"><span>通过/提交</span><strong>{{ selectedArchiveReportRecord.todayPassed }}</strong></div>
+                    <div class="term-report-data-item"><span>报错次数</span><strong>{{ selectedArchiveReportRecord.todayErrors }}</strong></div>
                     <div class="term-report-data-item"><span>照料次数</span><strong>{{ selectedArchiveReportRecord.totalActions }}</strong></div>
                     <div class="term-report-data-item"><span>植物阶段</span><strong>{{ selectedArchiveReportRecord.plantStage }}</strong></div>
                   </div>
@@ -1902,11 +2201,11 @@ onUnmounted(() => {
           </div>
           <div class="settlement-stage-row">
             <span>结算档位</span>
-            <select v-model.number="tmSettlementWaterings" class="settlement-stage-select" @change="timeMachineError = ''">
-              <option :value="0">stage1 · 0 次浇水</option>
-              <option :value="30">stage2 · 30 次浇水</option>
-              <option :value="60">stage3 · 60 次浇水</option>
-              <option :value="120">stage4 · 120 次浇水</option>
+            <select v-model.number="tmSettlementStage" class="settlement-stage-select" @change="timeMachineError = ''">
+              <option :value="1">代码阶段 1 · 初始积累</option>
+              <option :value="2">代码阶段 2 · 稳定发芽</option>
+              <option :value="3">代码阶段 3 · 代码量不错</option>
+              <option :value="4">代码阶段 4 · 代码量超群</option>
             </select>
           </div>
           <div v-if="timeMachineError" class="time-machine-error">{{ timeMachineError }}</div>
@@ -1921,10 +2220,81 @@ onUnmounted(() => {
 
     </div>
   </div>
+  </div>
 </template>
 
 <style scoped>
 /* 原有的基础与布局样式 */
+.authenticated-shell {
+  width: 100vw;
+  height: 100vh;
+}
+
+.auth-gate {
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  box-sizing: border-box;
+  color: #334331;
+  background:
+    linear-gradient(180deg, rgba(250, 252, 242, 0.78), rgba(229, 244, 224, 0.88)),
+    url('./assets/background.png') center / cover no-repeat;
+  font-family: "Microsoft YaHei", sans-serif;
+}
+
+.auth-gate-panel {
+  width: min(440px, 92vw);
+  padding: 30px;
+  box-sizing: border-box;
+  border: 2px solid rgba(87, 124, 87, 0.32);
+  border-radius: 16px;
+  background: rgba(250, 252, 242, 0.96);
+  box-shadow: 0 18px 46px rgba(54, 73, 48, 0.24);
+}
+
+.auth-gate-brand {
+  margin-bottom: 8px;
+  color: #5f7d4d;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.auth-gate-panel h1 {
+  margin: 0 0 10px;
+  color: #315c3b;
+  font-size: 28px;
+  line-height: 1.25;
+}
+
+.auth-gate-panel p {
+  margin: 0 0 20px;
+  color: #596a50;
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.auth-gate-form {
+  display: grid;
+  gap: 10px;
+}
+
+.auth-gate-input {
+  min-height: 40px;
+  font-size: 14px;
+}
+
+.auth-gate-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.auth-gate-status {
+  margin-top: 14px;
+}
+
 .viewport-root {
   width: 100vw;
   height: 100vh;

@@ -18,4 +18,6 @@ const termReportSchema = new mongoose.Schema({
   timestamps: true
 });
 
+termReportSchema.index({ userId: 1, solarTerm: 1 }, { unique: true });
+
 module.exports = mongoose.model('TermReport', termReportSchema);
