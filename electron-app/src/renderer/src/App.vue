@@ -2979,7 +2979,23 @@ onUnmounted(() => {
   will-change: transform;
 }
 
-.cat-stretching,
+.cat-stretching {
+  position: absolute;
+  left: 25px;
+  bottom: 75px;
+  width: 170px;
+  height: 170px;
+  display: block;
+  object-fit: contain;
+  object-position: center bottom;
+  filter: drop-shadow(0px 10px 10px rgba(0,0,0,0.5));
+  transition: transform 0.2s;
+  transform: scale(1.5);
+  transform-origin: bottom center;
+  cursor: grab;
+  will-change: transform;
+}
+
 .cat-jumping {
   position: absolute;
   left: 25px;
@@ -2995,6 +3011,11 @@ onUnmounted(() => {
   transform-origin: bottom center;
   cursor: grab;
   will-change: transform;
+}
+
+.cat-playing {
+  transform: scale(1.2);
+  transform-origin: bottom center;
 }
 
 .cat-image:active {
