@@ -7,7 +7,6 @@ const bcrypt = require('bcryptjs')
 const jwt = require('jsonwebtoken')
 
 const User = require('./models/User')
-// 👇 新增：引入节气统计和历史报告模型
 const TermDailyStat = require('./models/TermDailyStat')
 const TermReport = require('./models/TermReport')
 
@@ -29,9 +28,7 @@ if (!JWT_SECRET) {
   process.exit(1)
 }
 
-mongoose.connect(MONGO_URI, {
-  serverSelectionTimeoutMS: 5000
-})
+mongoose.connect(MONGO_URI, { serverSelectionTimeoutMS: 5000 })
   .then(() => console.log('MongoDB connected'))
   .catch((err) => {
     console.error('MongoDB connection failed:', err.message)
@@ -41,6 +38,8 @@ mongoose.connect(MONGO_URI, {
 function sanitizeUser(user) {
   return {
     username: user.username,
+    nickname: user.nickname || '',
+    birthday: user.birthday || '',
     totalCodeLines: user.totalCodeLines || 0,
     catFood: user.catFood || 0,
     waterDrops: user.waterDrops || 0,
@@ -54,24 +53,24 @@ function authenticateToken(req, res, next) {
   const [scheme, token] = authHeader.split(' ')
 
   if (scheme !== 'Bearer' || !token) {
-    return res.status(401).json({ success: false, message: '请先登录后再访问云端存档' })
+    return res.status(401).json({ success: false, message: 'Please log in first.' })
   }
 
   try {
     req.auth = jwt.verify(token, JWT_SECRET)
     next()
   } catch {
-    return res.status(401).json({ success: false, message: '登录已过期，请重新登录' })
+    return res.status(401).json({ success: false, message: 'Login expired, please log in again.' })
   }
 }
 
-app.get('/', (req, res) => {
-  res.send('CS Valley 后端服务器已就绪 ✅')
-})
+function isNonNegativeFiniteNumber(value) {
+  return Number.isFinite(value) && value >= 0
+}
 
-// ==========================================
-// 1. 用户认证与基础存档模块
-// ==========================================
+app.get('/', (req, res) => {
+  res.send('CS Valley server is ready.')
+})
 
 app.post('/api/register', async (req, res) => {
   try {
@@ -79,16 +78,16 @@ app.post('/api/register', async (req, res) => {
     const password = String(req.body.password || '')
 
     if (!username || !password) {
-      return res.status(400).json({ success: false, message: '用户名和密码不能为空' })
+      return res.status(400).json({ success: false, message: 'Username and password are required.' })
     }
 
     if (username.length > 32 || password.length < 6) {
-      return res.status(400).json({ success: false, message: '用户名最多 32 个字符，密码至少 6 位' })
+      return res.status(400).json({ success: false, message: 'Username must be at most 32 chars and password at least 6 chars.' })
     }
 
     const existingUser = await User.findOne({ username })
     if (existingUser) {
-      return res.status(400).json({ success: false, message: '这个用户名已经被注册了' })
+      return res.status(400).json({ success: false, message: 'Username already exists.' })
     }
 
     const salt = await bcrypt.genSalt(10)
@@ -104,11 +103,10 @@ app.post('/api/register', async (req, res) => {
     })
 
     await newUser.save()
-
-    res.status(201).json({ success: true, message: '注册成功，请登录' })
+    res.status(201).json({ success: true, message: 'Registered successfully, please log in.' })
   } catch (error) {
     console.error('Register failed:', error)
-    res.status(500).json({ success: false, message: '服务器内部错误' })
+    res.status(500).json({ success: false, message: 'Server error.' })
   }
 })
 
@@ -118,17 +116,17 @@ app.post('/api/login', async (req, res) => {
     const password = String(req.body.password || '')
 
     if (!username || !password) {
-      return res.status(400).json({ success: false, message: '用户名和密码不能为空' })
+      return res.status(400).json({ success: false, message: 'Username and password are required.' })
     }
 
     const user = await User.findOne({ username })
     if (!user) {
-      return res.status(400).json({ success: false, message: '用户不存在' })
+      return res.status(400).json({ success: false, message: 'User does not exist.' })
     }
 
     const isMatch = await bcrypt.compare(password, user.password)
     if (!isMatch) {
-      return res.status(400).json({ success: false, message: '密码错误' })
+      return res.status(400).json({ success: false, message: 'Incorrect password.' })
     }
 
     const token = jwt.sign(
@@ -139,14 +137,14 @@ app.post('/api/login', async (req, res) => {
 
     res.json({
       success: true,
-      message: '登录成功',
+      message: 'Login successful.',
       token,
       username: user.username,
       data: sanitizeUser(user)
     })
   } catch (error) {
     console.error('Login failed:', error)
-    res.status(500).json({ success: false, message: '服务器内部错误' })
+    res.status(500).json({ success: false, message: 'Server error.' })
   }
 })
 
@@ -158,11 +156,11 @@ app.post('/api/sync', authenticateToken, async (req, res) => {
     const plantStage = Number(req.body.plantStage || 1)
 
     if (!Number.isFinite(addedLines) || addedLines < 0 || addedLines > 5000) {
-      return res.status(400).json({ success: false, message: '单次同步代码行数异常' })
+      return res.status(400).json({ success: false, message: 'Invalid addedLines value.' })
     }
 
     if (![catFood, waterDrops, plantStage].every(Number.isFinite)) {
-      return res.status(400).json({ success: false, message: '同步数据格式异常' })
+      return res.status(400).json({ success: false, message: 'Invalid sync payload.' })
     }
 
     const updatedUser = await User.findByIdAndUpdate(
@@ -180,14 +178,14 @@ app.post('/api/sync', authenticateToken, async (req, res) => {
     )
 
     if (!updatedUser) {
-      return res.status(404).json({ success: false, message: '找不到该用户存档' })
+      return res.status(404).json({ success: false, message: 'User save not found.' })
     }
 
     console.log(`[sync] ${updatedUser.username}: +${addedLines} lines`)
-    res.json({ success: true, message: '云端同步完成', data: sanitizeUser(updatedUser) })
+    res.json({ success: true, message: 'Cloud sync completed.', data: sanitizeUser(updatedUser) })
   } catch (error) {
     console.error('Sync failed:', error)
-    res.status(500).json({ success: false, message: '服务器内部错误' })
+    res.status(500).json({ success: false, message: 'Server error.' })
   }
 })
 
@@ -195,53 +193,79 @@ app.get('/api/user/me', authenticateToken, async (req, res) => {
   try {
     const user = await User.findById(req.auth.userId)
     if (!user) {
-      return res.status(404).json({ success: false, message: '找不到该用户存档' })
+      return res.status(404).json({ success: false, message: 'User save not found.' })
     }
 
     res.json({ success: true, data: sanitizeUser(user) })
   } catch (error) {
     console.error('Fetch user failed:', error)
-    res.status(500).json({ success: false, message: '服务器内部错误' })
+    res.status(500).json({ success: false, message: 'Server error.' })
+  }
+})
+
+app.patch('/api/user/profile', authenticateToken, async (req, res) => {
+  try {
+    const nickname = String(req.body.nickname || '').trim().slice(0, 20)
+    const birthday = String(req.body.birthday || '').trim()
+
+    if (birthday && !/^\d{4}-\d{2}-\d{2}$/.test(birthday)) {
+      return res.status(400).json({ success: false, message: 'Birthday must use YYYY-MM-DD.' })
+    }
+
+    const updatedUser = await User.findByIdAndUpdate(
+      req.auth.userId,
+      { $set: { nickname, birthday } },
+      { new: true }
+    )
+
+    if (!updatedUser) {
+      return res.status(404).json({ success: false, message: 'User profile not found.' })
+    }
+
+    res.json({ success: true, message: 'Profile saved.', data: sanitizeUser(updatedUser) })
+  } catch (error) {
+    console.error('Update profile failed:', error)
+    res.status(500).json({ success: false, message: 'Server error.' })
   }
 })
 
 app.get('/api/user/:username', authenticateToken, async (req, res) => {
   if (req.params.username !== req.auth.username) {
-    return res.status(403).json({ success: false, message: '不能读取其他用户的云端存档' })
+    return res.status(403).json({ success: false, message: 'Cannot read another user save.' })
   }
 
   const user = await User.findById(req.auth.userId)
   if (!user) {
-    return res.status(404).json({ success: false, message: '找不到该用户存档' })
+    return res.status(404).json({ success: false, message: 'User save not found.' })
   }
 
   res.json({ success: true, data: sanitizeUser(user) })
 })
 
-// ==========================================
-// 2. 节气每日统计模块 (Term Daily Stats)
-// ==========================================
-
-// 上传/累加当天节气数据
 app.post('/api/term-stats', authenticateToken, async (req, res) => {
   try {
-    const { date, solarTerm } = req.body
+    const date = String(req.body.date || '').trim()
+    const solarTerm = String(req.body.solarTerm || '').trim()
     const codeLines = Number(req.body.codeLines || 0)
     const commitCount = Number(req.body.commitCount || 0)
     const errorCount = Number(req.body.errorCount || 0)
     const userId = req.auth.userId
 
     if (!date || !solarTerm) {
-      return res.status(400).json({ success: false, message: '日期和节气名称不能为空' })
+      return res.status(400).json({ success: false, message: 'date and solarTerm are required.' })
+    }
+
+    if (![codeLines, commitCount, errorCount].every(isNonNegativeFiniteNumber)) {
+      return res.status(400).json({ success: false, message: 'Term stats values must be non-negative numbers.' })
     }
 
     const updatedStat = await TermDailyStat.findOneAndUpdate(
       { userId, date, solarTerm },
       {
-        $inc: { 
-          codeLines: codeLines, 
-          commitCount: commitCount, 
-          errorCount: errorCount 
+        $inc: {
+          codeLines,
+          commitCount,
+          errorCount
         }
       },
       { upsert: true, new: true, setDefaultsOnInsert: true }
@@ -250,27 +274,28 @@ app.post('/api/term-stats', authenticateToken, async (req, res) => {
     res.json({ success: true, data: updatedStat })
   } catch (error) {
     console.error('Update term stats failed:', error)
-    res.status(500).json({ success: false, message: '服务器内部错误' })
+    res.status(500).json({ success: false, message: 'Server error.' })
   }
 })
 
-// 获取某节气的统计明细和汇总
 app.get('/api/term-stats', authenticateToken, async (req, res) => {
   try {
-    const { solarTerm } = req.query
+    const solarTerm = String(req.query.solarTerm || '').trim()
     const userId = req.auth.userId
 
     if (!solarTerm) {
-      return res.status(400).json({ success: false, message: '缺少参数 solarTerm' })
+      return res.status(400).json({ success: false, message: 'Missing solarTerm.' })
     }
 
     const stats = await TermDailyStat.find({ userId, solarTerm }).sort({ date: 1 })
 
-    let totalCodeLines = 0, totalCommitCount = 0, totalErrorCount = 0
-    stats.forEach(s => {
-      totalCodeLines += (s.codeLines || 0)
-      totalCommitCount += (s.commitCount || 0)
-      totalErrorCount += (s.errorCount || 0)
+    let totalCodeLines = 0
+    let totalCommitCount = 0
+    let totalErrorCount = 0
+    stats.forEach((stat) => {
+      totalCodeLines += stat.codeLines || 0
+      totalCommitCount += stat.commitCount || 0
+      totalErrorCount += stat.errorCount || 0
     })
 
     res.json({
@@ -285,18 +310,16 @@ app.get('/api/term-stats', authenticateToken, async (req, res) => {
     })
   } catch (error) {
     console.error('Fetch term stats failed:', error)
-    res.status(500).json({ success: false, message: '服务器内部错误' })
+    res.status(500).json({ success: false, message: 'Server error.' })
   }
 })
 
-// ==========================================
-// 3. 历史报告模块 (Term Reports)
-// ==========================================
-
-// 保存节气总结报告
 app.post('/api/reports', authenticateToken, async (req, res) => {
   try {
-    const { solarTerm, periodStart, periodEnd, summary } = req.body
+    const solarTerm = String(req.body.solarTerm || '').trim()
+    const periodStart = String(req.body.periodStart || '').trim()
+    const periodEnd = String(req.body.periodEnd || '').trim()
+    const summary = String(req.body.summary || '')
     const userId = req.auth.userId
     const rawPlantStage = Number(req.body.plantStage || 1)
     const rawHarvestStage = Number(req.body.harvestStage || 1)
@@ -306,25 +329,26 @@ app.post('/api/reports', authenticateToken, async (req, res) => {
     const harvestItemName = String(req.body.harvestItemName || '').trim().slice(0, 64)
 
     if (!solarTerm || !periodStart || !periodEnd) {
-      return res.status(400).json({ success: false, message: '报告参数不完整' })
+      return res.status(400).json({ success: false, message: 'Report payload is incomplete.' })
     }
 
-    // 先查出这个节气所有的每日统计（作为历史快照保存）
     const stats = await TermDailyStat.find({ userId, solarTerm }).sort({ date: 1 })
-    
-    let totalCodeLines = 0, totalCommitCount = 0, totalErrorCount = 0
-    stats.forEach(s => {
-      totalCodeLines += (s.codeLines || 0)
-      totalCommitCount += (s.commitCount || 0)
-      totalErrorCount += (s.errorCount || 0)
+
+    let totalCodeLines = 0
+    let totalCommitCount = 0
+    let totalErrorCount = 0
+    stats.forEach((stat) => {
+      totalCodeLines += stat.codeLines || 0
+      totalCommitCount += stat.commitCount || 0
+      totalErrorCount += stat.errorCount || 0
     })
 
-    // 同一用户、同一节气、同一周期重复保存时，覆盖旧记录
     const report = await TermReport.findOneAndUpdate(
-    const report = await TermReport.findOneAndUpdate(
-      { userId, solarTerm, periodStart, periodEnd },
+      { userId, solarTerm },
       {
         $set: {
+          periodStart,
+          periodEnd,
           totalCodeLines,
           totalCommitCount,
           totalErrorCount,
@@ -333,48 +357,43 @@ app.post('/api/reports', authenticateToken, async (req, res) => {
           harvestTier,
           harvestItemName,
           dailyStats: stats,
-          summary: summary || ''
+          summary
         }
       },
       { upsert: true, new: true, setDefaultsOnInsert: true }
     )
 
-    res.json({ success: true, message: '报告保存成功', data: report })
+    res.json({ success: true, message: 'Report saved.', data: report })
   } catch (error) {
     console.error('Save report failed:', error)
-    res.status(500).json({ success: false, message: '服务器内部错误' })
+    res.status(500).json({ success: false, message: 'Server error.' })
   }
 })
 
-// 查询我的所有历史报告列表 (可选传 ?solarTerm=立夏)
 app.get('/api/reports', authenticateToken, async (req, res) => {
   try {
-    const { solarTerm } = req.query
-    const userId = req.auth.userId
-
-    const query = { userId }
+    const solarTerm = String(req.query.solarTerm || '').trim()
+    const query = { userId: req.auth.userId }
     if (solarTerm) query.solarTerm = solarTerm
 
-    // 按创建时间倒序排列（最新的在最上面）
     const reports = await TermReport.find(query).sort({ createdAt: -1 })
     res.json({ success: true, data: reports })
   } catch (error) {
     console.error('Fetch reports failed:', error)
-    res.status(500).json({ success: false, message: '服务器内部错误' })
+    res.status(500).json({ success: false, message: 'Server error.' })
   }
 })
 
-// 查看某份具体的报告详情
 app.get('/api/reports/:id', authenticateToken, async (req, res) => {
   try {
     const report = await TermReport.findOne({ _id: req.params.id, userId: req.auth.userId })
     if (!report) {
-      return res.status(404).json({ success: false, message: '找不到该报告，或无权访问' })
+      return res.status(404).json({ success: false, message: 'Report not found.' })
     }
     res.json({ success: true, data: report })
   } catch (error) {
     console.error('Fetch report detail failed:', error)
-    res.status(500).json({ success: false, message: '服务器内部错误' })
+    res.status(500).json({ success: false, message: 'Server error.' })
   }
 })
 

@@ -52,6 +52,14 @@ export function fetchCloudSave(token) {
   })
 }
 
+export function updateUserProfile(token, payload) {
+  return request('/api/user/profile', {
+    method: 'PATCH',
+    headers: authHeaders(token),
+    body: JSON.stringify(payload)
+  })
+}
+
 export function syncCloudSave(token, payload) {
   return request('/api/sync', {
     method: 'POST',
