@@ -19,11 +19,136 @@ function getDocumentKey(uri: vscode.Uri): string {
     return uri.toString();
 }
 
+type CommentSyntax = {
+    line?: string[];
+    block?: Array<[string, string]>;
+};
+
+const COMMENT_SYNTAX_BY_LANGUAGE = new Map<string, CommentSyntax>([
+    ['bat', { line: ['REM ', 'rem ', '::'] }],
+    ['c', { line: ['//'], block: [['/*', '*/']] }],
+    ['cpp', { line: ['//'], block: [['/*', '*/']] }],
+    ['csharp', { line: ['//'], block: [['/*', '*/']] }],
+    ['css', { block: [['/*', '*/']] }],
+    ['go', { line: ['//'], block: [['/*', '*/']] }],
+    ['graphql', { line: ['#'] }],
+    ['html', { block: [['<!--', '-->']] }],
+    ['java', { line: ['//'], block: [['/*', '*/']] }],
+    ['javascript', { line: ['//'], block: [['/*', '*/']] }],
+    ['javascriptreact', { line: ['//'], block: [['/*', '*/']] }],
+    ['jsonc', { line: ['//'], block: [['/*', '*/']] }],
+    ['less', { line: ['//'], block: [['/*', '*/']] }],
+    ['php', { line: ['//', '#'], block: [['/*', '*/']] }],
+    ['powershell', { line: ['#'], block: [['<#', '#>']] }],
+    ['python', { line: ['#'],block: [['"', '"']]}],
+    ['ruby', { line: ['#'] }],
+    ['rust', { line: ['//'], block: [['/*', '*/']] }],
+    ['scss', { line: ['//'], block: [['/*', '*/']] }],
+    ['shellscript', { line: ['#'] }],
+    ['sql', { line: ['--'], block: [['/*', '*/']] }],
+    ['swift', { line: ['//'], block: [['/*', '*/']] }],
+    ['typescript', { line: ['//'], block: [['/*', '*/']] }],
+    ['typescriptreact', { line: ['//'], block: [['/*', '*/']] }],
+    ['vue', { line: ['//'], block: [['/*', '*/'], ['<!--', '-->']] }],
+    ['xml', { block: [['<!--', '-->']] }],
+    ['yaml', { line: ['#'] }],
+]);
+
+function findMatchingToken(text: string, tokens: string[] | undefined, position: number): string | undefined {
+    return tokens?.find(token => text.startsWith(token, position));
+}
+
+function findMatchingBlockStart(
+    text: string,
+    blockTokens: Array<[string, string]> | undefined,
+    position: number
+): [string, string] | undefined {
+    return blockTokens?.find(([start]) => text.startsWith(start, position));
+}
+
+function stripCommentsFromText(text: string, syntax: CommentSyntax): string {
+    let result = '';
+    let blockEndToken: string | undefined;
+    let quoteToken: string | undefined;
+    let isEscaped = false;
+
+    for (let index = 0; index < text.length; index++) {
+        const character = text[index];
+
+        if (blockEndToken) {
+            if (text.startsWith(blockEndToken, index)) {
+                index += blockEndToken.length - 1;
+                blockEndToken = undefined;
+                continue;
+            }
+
+            if (character === '\r' || character === '\n') {
+                result += character;
+            }
+
+            continue;
+        }
+
+        if (quoteToken) {
+            result += character;
+
+            if (isEscaped) {
+                isEscaped = false;
+                continue;
+            }
+
+            if (character === '\\') {
+                isEscaped = true;
+                continue;
+            }
+
+            if (character === quoteToken) {
+                quoteToken = undefined;
+            }
+
+            continue;
+        }
+
+        if (character === '"' || character === '\'' || character === '`') {
+            quoteToken = character;
+            result += character;
+            continue;
+        }
+
+        const lineCommentToken = findMatchingToken(text, syntax.line, index);
+        if (lineCommentToken) {
+            const nextNewline = text.indexOf('\n', index + lineCommentToken.length);
+            if (nextNewline === -1) {
+                break;
+            }
+
+            result += text.slice(nextNewline, nextNewline + 1);
+            index = nextNewline;
+            continue;
+        }
+
+        const blockComment = findMatchingBlockStart(text, syntax.block, index);
+        if (blockComment) {
+            blockEndToken = blockComment[1];
+            index += blockComment[0].length - 1;
+            continue;
+        }
+
+        result += character;
+    }
+
+    return result;
+}
+
 function getMeaningfulLineCount(document: vscode.TextDocument): number {
+    const syntax = COMMENT_SYNTAX_BY_LANGUAGE.get(document.languageId);
+    const text = syntax
+        ? stripCommentsFromText(document.getText(), syntax)
+        : document.getText();
     let meaningfulLines = 0;
 
-    for (let lineIndex = 0; lineIndex < document.lineCount; lineIndex++) {
-        if (document.lineAt(lineIndex).text.trim().length > 0) {
+    for (const line of text.split(/\r?\n/)) {
+        if (line.trim().length > 0) {
             meaningfulLines++;
         }
     }
