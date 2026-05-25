@@ -13,6 +13,7 @@ const authPassword = ref('')
 const authStatusMessage = ref('等待登录后同步云端存档')
 const cloudToken = ref(localStorage.getItem('codeSproutToken') || '')
 const loggedInUser = ref(localStorage.getItem('codeSproutUser') || '')
+const userRegisteredAt = ref(localStorage.getItem('codeSproutRegisteredAt') || '')
 const isCloudBusy = ref(false)
 const isRestoringSession = ref(Boolean(cloudToken.value && loggedInUser.value))
 const lastSyncTime = ref(localStorage.getItem('codeSproutLastSyncTime') || '')
@@ -95,9 +96,27 @@ let hasAutoSyncFailure = false
 watch(pendingSync, savePendingSyncToStorage, { deep: true })
 watch(settledSolarTerms, saveSettledSolarTerms, { deep: true })
 
-function setAuthSession(token, username) {
+function normalizeRegisteredAtFromData(data) {
+  const rawValue = data?.registeredAt || data?.createdAt || data?.created_at || ''
+  if (!rawValue) return ''
+  const parsedDate = new Date(rawValue)
+  if (!isValidDateObj(parsedDate)) return ''
+  return parsedDate.toISOString()
+}
+
+function setRegisteredAt(value) {
+  userRegisteredAt.value = value || ''
+  if (userRegisteredAt.value) {
+    localStorage.setItem('codeSproutRegisteredAt', userRegisteredAt.value)
+  } else {
+    localStorage.removeItem('codeSproutRegisteredAt')
+  }
+}
+
+function setAuthSession(token, username, sessionData = {}) {
   cloudToken.value = token
   loggedInUser.value = username
+  setRegisteredAt(normalizeRegisteredAtFromData(sessionData) || userRegisteredAt.value)
   localStorage.setItem('codeSproutToken', token)
   localStorage.setItem('codeSproutUser', username)
 }
@@ -116,12 +135,20 @@ function clearAuthSession() {
   lastSyncTime.value = ''
   localStorage.removeItem('codeSproutToken')
   localStorage.removeItem('codeSproutUser')
+  localStorage.removeItem('codeSproutRegisteredAt')
   localStorage.removeItem('codeSproutLastSyncTime')
+  userRegisteredAt.value = ''
   clearUserProfile()
 }
 
 function applyCloudSave(save) {
   if (!save) return
+
+  const normalizedRegisteredAt = normalizeRegisteredAtFromData(save)
+  if (normalizedRegisteredAt) {
+    setRegisteredAt(normalizedRegisteredAt)
+    pruneIneligibleArchiveRecords()
+  }
 
   if (typeof save.nickname === 'string') userNickname.value = save.nickname
   if (typeof save.birthday === 'string') userBirthday.value = save.birthday
@@ -142,7 +169,7 @@ async function loadCloudSave() {
   if (!cloudToken.value) return
 
   const result = await fetchCloudSave(cloudToken.value)
-  applyCloudSave(result.data)
+  applyCloudSave({ ...result, ...(result.data || {}) })
 }
 
 async function fetchLatestActivitySnapshot() {
@@ -184,9 +211,9 @@ async function handleLogin() {
   authStatusMessage.value = '正在登录并拉取云端存档...'
   try {
     const result = await loginAccount(authUsername.value.trim(), authPassword.value)
-    setAuthSession(result.token, result.username)
+    setAuthSession(result.token, result.username, { ...result, ...(result.data || {}) })
     pendingSync.value = loadPendingSyncFromStorage(result.username)
-    applyCloudSave(result.data)
+    applyCloudSave({ ...result, ...(result.data || {}) })
     await loadCloudSave()
     isRestoringSession.value = false
     authStatusMessage.value = '登录成功，云端存档已加载'
@@ -776,6 +803,8 @@ async function openArchive() {
         const cloudReports = {}
         const cloudHarvests = {}
         res.data.forEach(report => {
+          if (!canRestoreCloudReport(report)) return
+
           const termKey = solarTermMap[report.solarTerm]
           if (termKey && !cloudReports[termKey]) {
             // 🛠️ 核心修复：处理后台增量为0，但实际有总资产的情况
@@ -853,10 +882,8 @@ async function generateAndSaveCloudReport() {
     return
   }
 
-  if (!isSolarTermEndedForReport(termName)) {
-    message.value = selectedArchiveIsCurrentTerm.value
-      ? '当前节气还在生长中，还未生成节气报告。'
-      : `${termName} 还未进入结算时间，还未生成节气报告。`
+  if (!canGenerateSolarTermReport(termName)) {
+    message.value = getSolarTermReportBlockedReason(termName)
     resetCatState(3000)
     return
   }
@@ -1096,11 +1123,76 @@ function getSolarTermPeriod2026(termName) {
   return { start: formatDateForApi(startDate), end: formatDateForApi(endDate) }
 }
 
+function getRegisteredAtDate() {
+  if (!userRegisteredAt.value) return null
+  const registeredDate = new Date(userRegisteredAt.value)
+  return isValidDateObj(registeredDate) ? registeredDate : null
+}
+
+function getRegistrationTimelineIndex() {
+  const registeredDate = getRegisteredAtDate()
+  if (!registeredDate) return -1
+  if (registeredDate.getFullYear() < SOLAR_TERM_REPORT_YEAR) return 0
+  if (registeredDate.getFullYear() > SOLAR_TERM_REPORT_YEAR) return solarTermTimeline2026.length
+
+  const registeredLocalDate = makeLocalDate(
+    registeredDate.getFullYear(),
+    registeredDate.getMonth() + 1,
+    registeredDate.getDate()
+  )
+  const containingIndex = solarTermTimeline2026.findIndex((entry, index) => {
+    const nextStartDate = solarTermTimeline2026[index + 1]?.startDate || makeLocalDate(SOLAR_TERM_REPORT_YEAR + 1, 1, 1)
+    return registeredLocalDate >= entry.startDate && registeredLocalDate < nextStartDate
+  })
+  return containingIndex >= 0 ? containingIndex : 0
+}
+
+function hasUserExperiencedSolarTerm(termName) {
+  const selectedIndex = getSolarTermTimelineIndex(termName)
+  if (selectedIndex < 0 || !getRegisteredAtDate()) return false
+  return selectedIndex >= getRegistrationTimelineIndex()
+}
+
+function pruneIneligibleArchiveRecords() {
+  if (!getRegisteredAtDate()) return
+
+  const eligibleReportRecords = {}
+  Object.entries(reportRecords.value).forEach(([termKey, record]) => {
+    const termName = record?.termName || solarTermEntries.find((term) => term.key === termKey)?.name
+    if (hasUserExperiencedSolarTerm(termName)) eligibleReportRecords[termKey] = record
+  })
+  reportRecords.value = eligibleReportRecords
+
+  const eligibleHarvestRecords = {}
+  Object.entries(harvestRecords.value).forEach(([termKey, record]) => {
+    const termName = record?.termName || solarTermEntries.find((term) => term.key === termKey)?.name
+    if (hasUserExperiencedSolarTerm(termName)) eligibleHarvestRecords[termKey] = record
+  })
+  harvestRecords.value = eligibleHarvestRecords
+}
+
 function isSolarTermEndedForReport(termName) {
   const selectedIndex = getSolarTermTimelineIndex(termName)
   const currentIndex = getCurrentTimelineIndex()
   if (selectedIndex < 0 || currentIndex < 0) return false
   return currentIndex > selectedIndex || settledSolarTerms.value.includes(termName)
+}
+
+function canGenerateSolarTermReport(termName) {
+  return Boolean(termName && hasUserExperiencedSolarTerm(termName) && isSolarTermEndedForReport(termName))
+}
+
+function getSolarTermReportBlockedReason(termName) {
+  if (!termName) return '请先在节气档案中选择一个节气。'
+  if (!getRegisteredAtDate()) return '账号缺少注册时间，无法确认是否经历过该节气。'
+  if (!hasUserExperiencedSolarTerm(termName)) return `${termName} 在注册前已经结束，无法生成节气报告。`
+  if (termName === currentSolarTerm.value) return '当前节气还在生长中，还未生成节气报告。'
+  if (!isSolarTermEndedForReport(termName)) return `${termName} 还未进入结算时间，还未生成节气报告。`
+  return ''
+}
+
+function canRestoreCloudReport(report) {
+  return Boolean(report?.solarTerm && hasUserExperiencedSolarTerm(report.solarTerm))
 }
 
 function markSolarTermSettled(termName) {
@@ -1335,8 +1427,17 @@ const selectedArchiveIsEndedForReport = computed(() => {
   return Boolean(selectedArchiveTerm.value && isSolarTermEndedForReport(selectedArchiveTerm.value.name))
 })
 
+const selectedArchiveReportBlockedReason = computed(() => {
+  return selectedArchiveTerm.value ? getSolarTermReportBlockedReason(selectedArchiveTerm.value.name) : ''
+})
+
 const canGenerateSelectedTermReport = computed(() => {
-  return Boolean(cloudToken.value && selectedArchiveTerm.value && !selectedArchiveReportRecord.value && selectedArchiveIsEndedForReport.value)
+  return Boolean(
+    cloudToken.value &&
+    selectedArchiveTerm.value &&
+    !selectedArchiveReportRecord.value &&
+    canGenerateSolarTermReport(selectedArchiveTerm.value.name)
+  )
 })
 
 const selectedArchiveSolarTermImage = computed(() => {
@@ -2109,7 +2210,13 @@ onUnmounted(() => {
                   <div v-else class="archive-empty-action" style="margin-top: 15px;">
                     <p class="archive-empty-copy">暂无节气报告。</p>
                     
-                    <button v-if="cloudToken && selectedArchiveTerm" class="cloud-btn primary" style="width: 100%; margin-top: 10px; padding: 12px; font-weight: bold; background: #4f8f5f;" @click="generateAndSaveCloudReport">
+                    <button
+                      v-if="cloudToken && selectedArchiveTerm"
+                      class="cloud-btn primary"
+                      style="width: 100%; margin-top: 10px; padding: 12px; font-weight: bold; background: #4f8f5f;"
+                      :disabled="!canGenerateSelectedTermReport"
+                      @click="generateAndSaveCloudReport"
+                    >
                       📊 生成【{{ selectedArchiveTerm.name }}】节气报告
                     </button>
                     
@@ -2119,6 +2226,10 @@ onUnmounted(() => {
 
                     <p v-else-if="!cloudToken" class="archive-empty-copy" style="font-size: 12px; color: #8a7658; margin-top: 5px;">
                       (请先登录以生成云端报告)
+                    </p>
+
+                    <p v-else-if="selectedArchiveReportBlockedReason" class="archive-empty-copy" style="font-size: 12px; color: #8a7658; margin-top: 5px;">
+                      ({{ selectedArchiveReportBlockedReason }})
                     </p>
 
                     <p v-else-if="selectedArchiveIsEndedForReport" class="archive-empty-copy" style="font-size: 12px; color: #8a7658; margin-top: 5px;">
