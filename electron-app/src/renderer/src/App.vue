@@ -25,7 +25,6 @@ const latestHarvestTermKey = ref('')
 const latestReportTermKey = ref('')
 const previewImage = ref(null)
 const isAuthenticated = computed(() => Boolean(cloudToken.value && loggedInUser.value && !isRestoringSession.value))
-const isAuthGateVisible = computed(() => !isAuthenticated.value)
 
 const PENDING_SYNC_STORAGE_PREFIX = 'codeSproutPendingSync'
 const LAST_SEEN_SOLAR_TERM_KEY = 'codeSproutLastSeenSolarTerm'
@@ -489,6 +488,8 @@ const {
   message,
   CAT_MESSAGES
 })
+
+const isAuthGateVisible = computed(() => !isFloatingMode.value && !isAuthenticated.value)
 
 
 
