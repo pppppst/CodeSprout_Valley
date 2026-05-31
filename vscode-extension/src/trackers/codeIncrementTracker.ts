@@ -40,7 +40,7 @@ const COMMENT_SYNTAX_BY_LANGUAGE = new Map<string, CommentSyntax>([
     ['less', { line: ['//'], block: [['/*', '*/']] }],
     ['php', { line: ['//', '#'], block: [['/*', '*/']] }],
     ['powershell', { line: ['#'], block: [['<#', '#>']] }],
-    ['python', { line: ['#'],block: [['"', '"']]}],
+    ['python', { line: ['#'], block: [['"""', '"""'], ["'''", "'''"]] }],
     ['ruby', { line: ['#'] }],
     ['rust', { line: ['//'], block: [['/*', '*/']] }],
     ['scss', { line: ['//'], block: [['/*', '*/']] }],
@@ -109,6 +109,13 @@ function stripCommentsFromText(text: string, syntax: CommentSyntax): string {
             continue;
         }
 
+        const blockComment = findMatchingBlockStart(text, syntax.block, index);
+        if (blockComment) {
+            blockEndToken = blockComment[1];
+            index += blockComment[0].length - 1;
+            continue;
+        }
+
         if (character === '"' || character === '\'' || character === '`') {
             quoteToken = character;
             result += character;
@@ -124,13 +131,6 @@ function stripCommentsFromText(text: string, syntax: CommentSyntax): string {
 
             result += text.slice(nextNewline, nextNewline + 1);
             index = nextNewline;
-            continue;
-        }
-
-        const blockComment = findMatchingBlockStart(text, syntax.block, index);
-        if (blockComment) {
-            blockEndToken = blockComment[1];
-            index += blockComment[0].length - 1;
             continue;
         }
 
