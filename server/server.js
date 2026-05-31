@@ -1,5 +1,33 @@
 require('dotenv').config()
 
+//  新增：2026 年二十四节气标准时间表 (UTC格式，用于防绕过校验)
+const SOLAR_TERMS_2026 = {
+  '小寒': { start: '2026-01-05T00:00:00Z', end: '2026-01-20T00:00:00Z' },
+  '大寒': { start: '2026-01-20T00:00:00Z', end: '2026-02-04T00:00:00Z' },
+  '立春': { start: '2026-02-04T00:00:00Z', end: '2026-02-18T00:00:00Z' },
+  '雨水': { start: '2026-02-18T00:00:00Z', end: '2026-03-05T00:00:00Z' },
+  '惊蛰': { start: '2026-03-05T00:00:00Z', end: '2026-03-20T00:00:00Z' },
+  '春分': { start: '2026-03-20T00:00:00Z', end: '2026-04-04T00:00:00Z' },
+  '清明': { start: '2026-04-04T00:00:00Z', end: '2026-04-19T00:00:00Z' },
+  '谷雨': { start: '2026-04-19T00:00:00Z', end: '2026-05-05T00:00:00Z' },
+  '立夏': { start: '2026-05-05T00:00:00Z', end: '2026-05-21T00:00:00Z' },
+  '小满': { start: '2026-05-21T00:00:00Z', end: '2026-06-05T00:00:00Z' },
+  '芒种': { start: '2026-06-05T00:00:00Z', end: '2026-06-21T00:00:00Z' },
+  '夏至': { start: '2026-06-21T00:00:00Z', end: '2026-07-07T00:00:00Z' },
+  '小暑': { start: '2026-07-07T00:00:00Z', end: '2026-07-23T00:00:00Z' },
+  '大暑': { start: '2026-07-23T00:00:00Z', end: '2026-08-07T00:00:00Z' },
+  '立秋': { start: '2026-08-07T00:00:00Z', end: '2026-08-23T00:00:00Z' },
+  '处暑': { start: '2026-08-23T00:00:00Z', end: '2026-09-07T00:00:00Z' },
+  '白露': { start: '2026-09-07T00:00:00Z', end: '2026-09-23T00:00:00Z' },
+  '秋分': { start: '2026-09-23T00:00:00Z', end: '2026-10-08T00:00:00Z' },
+  '寒露': { start: '2026-10-08T00:00:00Z', end: '2026-10-23T00:00:00Z' },
+  '霜降': { start: '2026-10-23T00:00:00Z', end: '2026-11-07T00:00:00Z' },
+  '立冬': { start: '2026-11-07T00:00:00Z', end: '2026-11-22T00:00:00Z' },
+  '小雪': { start: '2026-11-22T00:00:00Z', end: '2026-12-07T00:00:00Z' },
+  '大雪': { start: '2026-12-07T00:00:00Z', end: '2026-12-21T00:00:00Z' },
+  '冬至': { start: '2026-12-21T00:00:00Z', end: '2027-01-05T00:00:00Z' }
+}
+
 const express = require('express')
 const mongoose = require('mongoose')
 const cors = require('cors')
@@ -36,6 +64,9 @@ mongoose.connect(MONGO_URI, { serverSelectionTimeoutMS: 5000 })
   })
 
 function sanitizeUser(user) {
+  //  提取可靠的注册时间：优先取 createdAt，没有的话从 _id 里强行解析
+  const registrationDate = user.createdAt || user._id.getTimestamp()
+  
   return {
     username: user.username,
     nickname: user.nickname || '',
@@ -44,7 +75,8 @@ function sanitizeUser(user) {
     catFood: user.catFood || 0,
     waterDrops: user.waterDrops || 0,
     plantStage: user.plantStage || 1,
-    lastSyncTime: user.lastSyncTime
+    lastSyncTime: user.lastSyncTime,
+    registeredAt: registrationDate.toISOString() //  返回给前端
   }
 }
 
@@ -332,6 +364,27 @@ app.post('/api/reports', authenticateToken, async (req, res) => {
       return res.status(400).json({ success: false, message: 'Report payload is incomplete.' })
     }
 
+    //  防绕过校验逻辑开始
+    const user = await User.findById(userId)
+    if (!user) return res.status(404).json({ success: false, message: 'User not found.' })
+    
+    const termSchedule = SOLAR_TERMS_2026[solarTerm]
+    if (termSchedule) {
+      const termEndTime = new Date(termSchedule.end).getTime()
+      const userRegTime = (user.createdAt || user._id.getTimestamp()).getTime()
+      const nowTime = Date.now()
+
+      // 规则1: 节气还没彻底结束，不能提前生成报告
+      if (nowTime < termEndTime) {
+        return res.status(403).json({ success: false, message: `The solar term [${solarTerm}] has not ended yet. Cannot generate report.` })
+      }
+      // 规则2: 节气在用户注册前就已经结束了，拒绝蹭历史成就
+      if (userRegTime > termEndTime) {
+        return res.status(403).json({ success: false, message: `The solar term [${solarTerm}] ended before your account was registered.` })
+      }
+    }
+    //  防绕过校验逻辑结束
+
     const stats = await TermDailyStat.find({ userId, solarTerm }).sort({ date: 1 })
 
     let totalCodeLines = 0
@@ -347,17 +400,8 @@ app.post('/api/reports', authenticateToken, async (req, res) => {
       { userId, solarTerm },
       {
         $set: {
-          periodStart,
-          periodEnd,
-          totalCodeLines,
-          totalCommitCount,
-          totalErrorCount,
-          plantStage,
-          harvestStage,
-          harvestTier,
-          harvestItemName,
-          dailyStats: stats,
-          summary
+          periodStart, periodEnd, totalCodeLines, totalCommitCount, totalErrorCount,
+          plantStage, harvestStage, harvestTier, harvestItemName, dailyStats: stats, summary
         }
       },
       { upsert: true, new: true, setDefaultsOnInsert: true }
@@ -376,8 +420,23 @@ app.get('/api/reports', authenticateToken, async (req, res) => {
     const query = { userId: req.auth.userId }
     if (solarTerm) query.solarTerm = solarTerm
 
-    const reports = await TermReport.find(query).sort({ createdAt: -1 })
-    res.json({ success: true, data: reports })
+    const user = await User.findById(req.auth.userId)
+    if (!user) return res.status(404).json({ success: false, message: 'User not found.' })
+    const userRegTime = (user.createdAt || user._id.getTimestamp()).getTime()
+
+    const allReports = await TermReport.find(query).sort({ createdAt: -1 })
+    
+    //  脏数据过滤：只返回注册后经历过的节气报告
+    const validReports = allReports.filter(report => {
+      const termSchedule = SOLAR_TERMS_2026[report.solarTerm]
+      if (!termSchedule) return true // 找不到时间表的放行
+      
+      const termEndTime = new Date(termSchedule.end).getTime()
+      // 如果节气在用户注册之前就结束了，这个报告就是非法历史数据，丢弃
+      return userRegTime <= termEndTime
+    })
+
+    res.json({ success: true, data: validReports })
   } catch (error) {
     console.error('Fetch reports failed:', error)
     res.status(500).json({ success: false, message: 'Server error.' })
@@ -396,6 +455,37 @@ app.get('/api/reports/:id', authenticateToken, async (req, res) => {
     res.status(500).json({ success: false, message: 'Server error.' })
   }
 })
+
+// 临时数据迁移脚本：无视 Mongoose 规则，使用原生驱动直接修改
+async function migrateOldUsers() {
+  try {
+    // 找出所有没有 createdAt 字段的老用户
+    const oldUsers = await User.find({ createdAt: { $exists: false } })
+    
+    if (oldUsers.length > 0) {
+      console.log(`[数据迁移] 发现 ${oldUsers.length} 个老用户，启动原生数据库最高权限写入...`)
+      
+      for (const user of oldUsers) {
+        // 从 _id 提取精确到秒的真实注册时间
+        const trueTime = user._id.getTimestamp()
+        
+        // 🌟 终极大招：User.collection 直接调用原生 MongoDB 驱动！
+        // 它会彻底无视 Mongoose 的 immutable (不可变) 保护
+        await User.collection.updateOne(
+          { _id: user._id },
+          { $set: { createdAt: trueTime } }
+        )
+      }
+      console.log('[数据迁移] 原生驱动写入成功，老用户时间戳已完美补齐！')
+    } else {
+      console.log('[数据迁移] 数据库很干净，没有缺失 createdAt 的老用户。')
+    }
+  } catch (error) {
+    console.error('迁移失败:', error)
+  }
+}
+// 运行迁移脚本
+migrateOldUsers()
 
 app.listen(PORT, () => {
   console.log(`CS Valley server listening at http://localhost:${PORT}`)

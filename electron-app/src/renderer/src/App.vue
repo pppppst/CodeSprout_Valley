@@ -158,6 +158,20 @@ function applyCloudSave(save) {
   foodStock.value = Number(save.catFood || 0)
   waterStock.value = Number(save.waterDrops || 0)
 
+  // 读取云端的植物状态，覆盖前端默认值。
+  // 注意：因为 currentPlantStage 是一个根据浇水次数 (plantWaterByTerm) 计算得出的 computed 属性，
+  // 我们需要反向计算出对应的浇水次数并覆盖当前节气的状态
+  if (save.plantStage !== undefined && currentTermPinyin.value) {
+    const requiredWaterings = getMinimumWateringsForPlantStage(save.plantStage)
+    plantWaterByTerm.value = {
+      ...plantWaterByTerm.value,
+      [currentTermPinyin.value]: Math.max(
+        plantWaterByTerm.value[currentTermPinyin.value] || 0,
+        requiredWaterings
+      )
+    }
+  }
+
   if (save.lastSyncTime) {
     lastSyncTime.value = new Date(save.lastSyncTime).toLocaleString()
     localStorage.setItem('codeSproutLastSyncTime', lastSyncTime.value)
