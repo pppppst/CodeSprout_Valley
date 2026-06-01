@@ -495,19 +495,17 @@ const currentJumpFrame = ref(0)
 const currentWalkFrame = ref(0)
 
 const CAT_MESSAGES = {
-  sleep: '🐱 睡觉中...',
+  sleep: '🐱 猫猫玩累了，正在睡觉中...',
   play: '😺 充满活力，玩耍中！',
   eating: '😺 吧唧吧唧...猫粮真香！(经验+10)',
   happy: '❤️ 呼噜呼噜...最喜欢你了！',
   refused: '😿 喵...肚子饿，可是猫粮不足 10 份！',
-  lifted: '哇！起飞啦~',
-  landed: '稳稳落地！继续玩耍~',
-  watering: '🌱 咕噜咕噜...水好甜！'
+  watering: '😺 咕噜咕噜...水好甜！'
 }
 
 const BASE_CAT_STATES = new Set(['sleep', 'play'])
 
-const actionStates = new Set(['eating', 'happy', 'refused', 'stretching', 'jumping', 'lifted'])
+const actionStates = new Set(['eating', 'happy', 'refused', 'stretching', 'jumping'])
 
 function getBaseCatState() {
   return lastFedDate.value === getTodayString() ? 'play' : 'sleep'
@@ -573,7 +571,7 @@ function syncCatStateToBase() {
 
 // 动态计算当前的猫咪图片
 const currentCatImage = computed(() => {
-  if (catState.value === 'lifted') return catImages.lifted || sleepFrames[0]
+  if (isFloatingMode.value && catState.value === 'lifted') return catImages.lifted || sleepFrames[0]
   if (isFloatingMode.value) return walkFrames[currentWalkFrame.value]
   if (catState.value === 'sleep') return sleepFrames[currentSleepFrame.value]
   if (catState.value === 'play') return playFrames[currentPlayFrame.value]
@@ -731,7 +729,7 @@ function feedCat() {
 }
 
 function interactWithCat() {
-  if (catState.value === 'eating' || catState.value === 'lifted') return 
+  if (catState.value === 'eating' || (isFloatingMode.value && catState.value === 'lifted')) return 
 
   setCatState('happy', CAT_MESSAGES.happy)
   resetCatState(2000)
@@ -2155,8 +2153,7 @@ onUnmounted(() => {
               'cat-refused': catState === 'refused',
               'cat-playing': catState === 'play',
               'cat-stretching': catState === 'stretching',
-              'cat-jumping': catState === 'jumping',
-              'cat-lifted': catState === 'lifted'
+              'cat-jumping': catState === 'jumping'
             }"
             :src="currentCatImage"
             draggable="false"
@@ -3090,7 +3087,7 @@ onUnmounted(() => {
   background: url('./assets/speech_bubble.png') no-repeat center;
   background-size: 100% 100%;
   color: #333;
-  padding: 35px 45px 25px;
+  padding: 15px 25px 20px;
   font-weight: bold;
   font-size: 14px;
   pointer-events: auto;
@@ -3266,7 +3263,9 @@ onUnmounted(() => {
 .archive-book-panel {
   --archive-height: 80vh;
   position: relative;
-  width: 1000px;
+  /* 响应式宽度：在小屏幕下收缩，但在大屏幕保持 1000px */
+  width: min(1000px, 95%);
+  max-width: 1000px;
   height: var(--archive-height);
   max-height: 820px;
   padding: 18px 20px 20px;
@@ -3356,18 +3355,41 @@ onUnmounted(() => {
 .archive-grid {
   display: grid;
   grid-template-columns: repeat(6, 58px);
-  grid-template-rows: repeat(4, 68px);
+  grid-auto-rows: 68px;
   justify-content: center;
   gap: 25px 7px;
   margin: 0;
-  align-content: center;
+  align-content: start; /* 从顶部开始，方便滚动 */
 }
 
-/* 保证左侧页内的格子在容器中垂直和水平居中 */
+/* 左侧页：允许在高度受限时滚动 */
 .archive-left-page {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* 使左侧滚动条与右侧详情滚动条样式一致 */
+.archive-left-page {
+  scrollbar-color: #d89d58 rgba(225, 202, 163, 0.5);
+  scrollbar-width: thin;
+}
+
+.archive-left-page::-webkit-scrollbar {
+  width: 9px;
+}
+
+.archive-left-page::-webkit-scrollbar-track {
+  border-radius: 999px;
+  background: rgba(225, 202, 163, 0.42);
+}
+
+.archive-left-page::-webkit-scrollbar-thumb {
+  border: 2px solid rgba(246, 235, 211, 0.88);
+  border-radius: 999px;
+  background: #d89d58;
 }
 
 .archive-cell-img {
@@ -3464,7 +3486,9 @@ onUnmounted(() => {
 
 .archive-detail-scroll {
   width: 100%;
-  max-height: 408px;
+  /* 使用 flex 布局自动占用剩余高度，并在内容溢出时滚动 */
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
   padding: 16px 10px 4px;
   scrollbar-color: #d89d58 rgba(225, 202, 163, 0.5);
@@ -3876,14 +3900,7 @@ onUnmounted(() => {
 }
 
 /* 5. 拖拽悬空 */
-.cat-lifted {
-  animation: dangle 0.6s ease-in-out infinite alternate;
-  transform-origin: top center;
-}
-@keyframes dangle {
-  from { transform: rotate(-8deg) translateY(-10px); }
-  to { transform: rotate(8deg) translateY(-10px); }
-}
+/* 主页面不再使用 cat-lifted 视觉效果；悬浮窗仍可使用消息文案 */
 </style>
 
 <style>
