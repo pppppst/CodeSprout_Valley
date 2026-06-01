@@ -6,7 +6,7 @@ import { registerAccount, loginAccount, fetchCloudSave, updateUserProfile, syncC
 import WeatherEffect from './components/WeatherEffect.vue'
 import { useFloatingWindow } from './components/floatingWindow'
 import { SolarUtil } from 'lunar-javascript'
-import { bubbleMessages } from './bubbleMessages'
+import { bubbleMessages, sleepBubbleMessages } from './bubbleMessages'
 
 const authUsername = ref('')
 const authPassword = ref('')
@@ -417,15 +417,21 @@ const syncedCodeLines = ref(0)
 const catExp = ref(0)
 const message = ref('🐱 睡觉中...')
 const isBubbleShaking = ref(false)
-let lastBubbleIndex = -1
+const lastBubbleIndexByState = {
+  play: -1,
+  sleep: -1
+}
 function shakeBubble() {
   if (isBubbleShaking.value) return
+  const stateKey = catState.value === 'play' ? 'play' : 'sleep'
+  const activeMessages = stateKey === 'play' ? bubbleMessages : sleepBubbleMessages
+  if (!activeMessages.length) return
   let idx
   do {
-    idx = Math.floor(Math.random() * bubbleMessages.length)
-  } while (idx === lastBubbleIndex && bubbleMessages.length > 1)
-  lastBubbleIndex = idx
-  message.value = bubbleMessages[idx]
+    idx = Math.floor(Math.random() * activeMessages.length)
+  } while (idx === lastBubbleIndexByState[stateKey] && activeMessages.length > 1)
+  lastBubbleIndexByState[stateKey] = idx
+  message.value = activeMessages[idx]
   isBubbleShaking.value = true
   setTimeout(() => { isBubbleShaking.value = false }, 400)
 }
