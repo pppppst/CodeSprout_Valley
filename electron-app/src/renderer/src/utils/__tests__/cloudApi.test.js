@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   API_BASE,
+  fetchAdminUsers,
   fetchCloudSave,
   fetchHistoryReports,
   fetchTermStats,
@@ -69,6 +70,17 @@ describe('cloudApi helpers', () => {
 
     const [, options] = globalThis.fetch.mock.calls[0]
     expect(options.headers.Authorization).toBe('Bearer token-123')
+  })
+
+  it('fetches admin users with authorization headers', async () => {
+    mockFetchResponse({ jsonData: { success: true, data: [] } })
+
+    await fetchAdminUsers('admin-token')
+
+    const [url, options] = globalThis.fetch.mock.calls[0]
+    expect(url).toBe(`${API_BASE}/api/admin/users`)
+    expect(options.method).toBe('GET')
+    expect(options.headers.Authorization).toBe('Bearer admin-token')
   })
 
   it('encodes solar term query parameters', async () => {
