@@ -42,6 +42,8 @@ const app = express()
 const PORT = process.env.PORT || 3000
 const MONGO_URI = process.env.MONGO_URI
 const JWT_SECRET = process.env.JWT_SECRET
+const ADMIN_USERNAME = String(process.env.ADMIN_USERNAME || '').trim()
+const ADMIN_PASSWORD = String(process.env.ADMIN_PASSWORD || '')
 
 app.use(cors())
 app.use(express.json())
@@ -57,16 +59,38 @@ if (!JWT_SECRET) {
 }
 
 mongoose.connect(MONGO_URI, { serverSelectionTimeoutMS: 5000 })
-  .then(() => console.log('MongoDB connected'))
+  .then(async () => {
+    console.log('MongoDB connected')
+    await ensureAdminAccount()
+  })
   .catch((err) => {
     console.error('MongoDB connection failed:', err.message)
     process.exit(1)
   })
 
 function sanitizeUser(user) {
-  // 提取可靠的注册时间：优先取 createdAt，没有的话从 _id 里强行解析
   const registrationDate = user.createdAt || user._id.getTimestamp()
-  
+  const role = user.role === 'admin' ? 'admin' : 'user'
+
+  return {
+    username: user.username,
+    role,
+    isAdmin: role === 'admin',
+    nickname: user.nickname || '',
+    birthday: user.birthday || '',
+    totalCodeLines: user.totalCodeLines || 0,
+    catFood: user.catFood || 0,
+    waterDrops: user.waterDrops || 0,
+    plantStage: user.plantStage || 1,
+    lastSyncTime: user.lastSyncTime,
+    registeredAt: registrationDate.toISOString(),
+    updatedAt: user.updatedAt
+  }
+}
+
+function sanitizeAdminUser(user) {
+  const registrationDate = user.createdAt || user._id.getTimestamp()
+
   return {
     username: user.username,
     nickname: user.nickname || '',
@@ -76,8 +100,48 @@ function sanitizeUser(user) {
     waterDrops: user.waterDrops || 0,
     plantStage: user.plantStage || 1,
     lastSyncTime: user.lastSyncTime,
-    registeredAt: registrationDate.toISOString() // 返回给前端
+    registeredAt: registrationDate.toISOString(),
+    updatedAt: user.updatedAt
   }
+}
+
+async function ensureAdminAccount() {
+  if (!ADMIN_USERNAME || !ADMIN_PASSWORD) {
+    console.log('Admin account initialization skipped: ADMIN_USERNAME or ADMIN_PASSWORD is not set.')
+    return
+  }
+
+  if (ADMIN_USERNAME.length > 32 || ADMIN_PASSWORD.length < 6) {
+    console.warn('Admin account initialization skipped: username must be at most 32 chars and password at least 6 chars.')
+    return
+  }
+
+  const existingAdmin = await User.findOne({ username: ADMIN_USERNAME })
+  const salt = await bcrypt.genSalt(10)
+
+  if (!existingAdmin) {
+    const hashedPassword = await bcrypt.hash(ADMIN_PASSWORD, salt)
+    await User.create({
+      username: ADMIN_USERNAME,
+      password: hashedPassword,
+      role: 'admin',
+      totalCodeLines: 0,
+      catFood: 0,
+      waterDrops: 0,
+      plantStage: 1
+    })
+    console.log(`Admin account created: ${ADMIN_USERNAME}`)
+    return
+  }
+
+  const update = { role: 'admin' }
+  const passwordMatches = await bcrypt.compare(ADMIN_PASSWORD, existingAdmin.password)
+  if (!passwordMatches) {
+    update.password = await bcrypt.hash(ADMIN_PASSWORD, salt)
+  }
+
+  await User.updateOne({ _id: existingAdmin._id }, { $set: update })
+  console.log(`Admin account ready: ${ADMIN_USERNAME}`)
 }
 
 function authenticateToken(req, res, next) {
@@ -93,6 +157,25 @@ function authenticateToken(req, res, next) {
     next()
   } catch {
     return res.status(401).json({ success: false, message: 'Login expired, please log in again.' })
+  }
+}
+
+async function authenticateAdmin(req, res, next) {
+  try {
+    const user = await User.findById(req.auth.userId)
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User save not found.' })
+    }
+
+    if (user.role !== 'admin') {
+      return res.status(403).json({ success: false, message: 'Admin permission is required.' })
+    }
+
+    req.adminUser = user
+    next()
+  } catch (error) {
+    console.error('Admin auth failed:', error)
+    res.status(500).json({ success: false, message: 'Server error.' })
   }
 }
 
@@ -128,6 +211,7 @@ app.post('/api/register', async (req, res) => {
     const newUser = new User({
       username,
       password: hashedPassword,
+      role: 'user',
       totalCodeLines: 0,
       catFood: 0,
       waterDrops: 0,
@@ -162,7 +246,7 @@ app.post('/api/login', async (req, res) => {
     }
 
     const token = jwt.sign(
-      { userId: user._id.toString(), username: user.username },
+      { userId: user._id.toString(), username: user.username, role: user.role === 'admin' ? 'admin' : 'user' },
       JWT_SECRET,
       { expiresIn: '7d' }
     )
@@ -231,6 +315,16 @@ app.get('/api/user/me', authenticateToken, async (req, res) => {
     res.json({ success: true, data: sanitizeUser(user) })
   } catch (error) {
     console.error('Fetch user failed:', error)
+    res.status(500).json({ success: false, message: 'Server error.' })
+  }
+})
+
+app.get('/api/admin/users', authenticateToken, authenticateAdmin, async (req, res) => {
+  try {
+    const users = await User.find({}).sort({ createdAt: -1, username: 1 })
+    res.json({ success: true, data: users.map(sanitizeAdminUser) })
+  } catch (error) {
+    console.error('Fetch admin users failed:', error)
     res.status(500).json({ success: false, message: 'Server error.' })
   }
 })

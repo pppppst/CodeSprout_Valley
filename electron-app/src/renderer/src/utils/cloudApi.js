@@ -52,6 +52,13 @@ export function fetchCloudSave(token) {
   })
 }
 
+export function fetchAdminUsers(token) {
+  return request('/api/admin/users', {
+    method: 'GET',
+    headers: authHeaders(token)
+  })
+}
+
 export function updateUserProfile(token, payload) {
   return request('/api/user/profile', {
     method: 'PATCH',
