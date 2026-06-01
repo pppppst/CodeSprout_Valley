@@ -27,8 +27,8 @@ const previewImage = ref(null)
 const isAuthenticated = computed(() => Boolean(cloudToken.value && loggedInUser.value && !isRestoringSession.value))
 
 const PENDING_SYNC_STORAGE_PREFIX = 'codeSproutPendingSync'
-const LAST_SEEN_SOLAR_TERM_KEY = 'codeSproutLastSeenSolarTerm'
-const SETTLED_SOLAR_TERMS_KEY = 'codeSproutSettledSolarTerms2026'
+const LAST_SEEN_SOLAR_TERM_STORAGE_PREFIX = 'codeSproutLastSeenSolarTerm'
+const SETTLED_SOLAR_TERMS_STORAGE_PREFIX = 'codeSproutSettledSolarTerms2026'
 const SOLAR_TERM_REPORT_YEAR = 2026
 const AUTO_SYNC_INTERVAL_MS = 30000
 
@@ -68,9 +68,40 @@ function clearPendingSyncStorage(username = loggedInUser.value) {
   localStorage.removeItem(getPendingSyncStorageKey(username))
 }
 
-function loadSettledSolarTerms() {
+function getSolarTermStateStorageName(username = loggedInUser.value) {
+  return encodeURIComponent(String(username || 'anonymous'))
+}
+
+function getLastSeenSolarTermStorageKey(username = loggedInUser.value) {
+  return `${LAST_SEEN_SOLAR_TERM_STORAGE_PREFIX}:${getSolarTermStateStorageName(username)}`
+}
+
+function getSettledSolarTermsStorageKey(username = loggedInUser.value) {
+  return `${SETTLED_SOLAR_TERMS_STORAGE_PREFIX}:${getSolarTermStateStorageName(username)}`
+}
+
+function clearLegacySolarTermStorage() {
+  localStorage.removeItem(LAST_SEEN_SOLAR_TERM_STORAGE_PREFIX)
+  localStorage.removeItem(SETTLED_SOLAR_TERMS_STORAGE_PREFIX)
+}
+
+function loadLastSeenSolarTerm(username = loggedInUser.value) {
+  clearLegacySolarTermStorage()
+  return localStorage.getItem(getLastSeenSolarTermStorageKey(username)) || ''
+}
+
+function saveLastSeenSolarTerm(termName, username = loggedInUser.value) {
+  if (termName) {
+    localStorage.setItem(getLastSeenSolarTermStorageKey(username), termName)
+  } else {
+    localStorage.removeItem(getLastSeenSolarTermStorageKey(username))
+  }
+}
+
+function loadSettledSolarTerms(username = loggedInUser.value) {
+  clearLegacySolarTermStorage()
   try {
-    const saved = localStorage.getItem(SETTLED_SOLAR_TERMS_KEY)
+    const saved = localStorage.getItem(getSettledSolarTermsStorageKey(username))
     const parsed = saved ? JSON.parse(saved) : []
     return Array.isArray(parsed) ? parsed.filter((name) => typeof name === 'string' && name.trim()) : []
   } catch {
@@ -79,14 +110,19 @@ function loadSettledSolarTerms() {
 }
 
 function saveSettledSolarTerms() {
-  localStorage.setItem(SETTLED_SOLAR_TERMS_KEY, JSON.stringify(settledSolarTerms.value))
+  localStorage.setItem(getSettledSolarTermsStorageKey(), JSON.stringify(settledSolarTerms.value))
+}
+
+function reloadSolarTermStateForUser(username = loggedInUser.value) {
+  lastSeenSolarTerm.value = loadLastSeenSolarTerm(username)
+  settledSolarTerms.value = loadSettledSolarTerms(username)
 }
 
 // ==========================================
 // 🌟 新增：自动同步缓冲池 (存钱罐)
 // ==========================================
 const pendingSync = ref(loadPendingSyncFromStorage())
-const lastSeenSolarTerm = ref(localStorage.getItem(LAST_SEEN_SOLAR_TERM_KEY) || '')
+const lastSeenSolarTerm = ref(loadLastSeenSolarTerm())
 const settledSolarTerms = ref(loadSettledSolarTerms())
 let autoSyncTimer = null
 let autoSyncInFlight = false
@@ -118,6 +154,7 @@ function setAuthSession(token, username, sessionData = {}) {
   setRegisteredAt(normalizeRegisteredAtFromData(sessionData) || userRegisteredAt.value)
   localStorage.setItem('codeSproutToken', token)
   localStorage.setItem('codeSproutUser', username)
+  reloadSolarTermStateForUser(username)
 }
 
 function clearUserProfile() {
@@ -132,6 +169,8 @@ function clearAuthSession() {
   loggedInUser.value = ''
   isRestoringSession.value = false
   lastSyncTime.value = ''
+  lastSeenSolarTerm.value = ''
+  settledSolarTerms.value = []
   localStorage.removeItem('codeSproutToken')
   localStorage.removeItem('codeSproutUser')
   localStorage.removeItem('codeSproutRegisteredAt')
@@ -1216,6 +1255,8 @@ function markSolarTermSettled(termName) {
 }
 
 function checkSolarTermTransition() {
+  if (isSandboxActive.value) return
+
   const termName = currentSolarTerm.value
   if (!termName) return
 
@@ -1224,7 +1265,7 @@ function checkSolarTermTransition() {
   }
 
   lastSeenSolarTerm.value = termName
-  localStorage.setItem(LAST_SEEN_SOLAR_TERM_KEY, termName)
+  saveLastSeenSolarTerm(termName)
 }
 
 function getDefaultArchiveTermKey() {
