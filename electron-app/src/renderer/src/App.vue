@@ -2,17 +2,18 @@
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { getActiveJieQi } from './utils/calendar'
 // 🌟 1. 引入所有新的云端接口
-import { registerAccount, loginAccount, fetchCloudSave, updateUserProfile, syncCloudSave, uploadTermDailyStat, fetchTermStats, saveTermReport, fetchHistoryReports } from './utils/cloudApi'
+import { registerAccount, loginAccount, fetchCloudSave, fetchAdminUsers, updateUserProfile, syncCloudSave, uploadTermDailyStat, fetchTermStats, saveTermReport, fetchHistoryReports } from './utils/cloudApi'
 import WeatherEffect from './components/WeatherEffect.vue'
 import { useFloatingWindow } from './components/floatingWindow'
 import { SolarUtil } from 'lunar-javascript'
-import { bubbleMessages } from './bubbleMessages'
+import { bubbleMessages, sleepBubbleMessages } from './bubbleMessages'
 
 const authUsername = ref('')
 const authPassword = ref('')
 const authStatusMessage = ref('等待登录后同步云端存档')
 const cloudToken = ref(localStorage.getItem('codeSproutToken') || '')
 const loggedInUser = ref(localStorage.getItem('codeSproutUser') || '')
+const userRole = ref(localStorage.getItem('codeSproutRole') || 'user')
 const userRegisteredAt = ref(localStorage.getItem('codeSproutRegisteredAt') || '')
 const isCloudBusy = ref(false)
 const isRestoringSession = ref(Boolean(cloudToken.value && loggedInUser.value))
@@ -25,10 +26,11 @@ const latestHarvestTermKey = ref('')
 const latestReportTermKey = ref('')
 const previewImage = ref(null)
 const isAuthenticated = computed(() => Boolean(cloudToken.value && loggedInUser.value && !isRestoringSession.value))
+const isAdmin = computed(() => userRole.value === 'admin')
 
 const PENDING_SYNC_STORAGE_PREFIX = 'codeSproutPendingSync'
-const LAST_SEEN_SOLAR_TERM_KEY = 'codeSproutLastSeenSolarTerm'
-const SETTLED_SOLAR_TERMS_KEY = 'codeSproutSettledSolarTerms2026'
+const LAST_SEEN_SOLAR_TERM_STORAGE_PREFIX = 'codeSproutLastSeenSolarTerm'
+const SETTLED_SOLAR_TERMS_STORAGE_PREFIX = 'codeSproutSettledSolarTerms2026'
 const SOLAR_TERM_REPORT_YEAR = 2026
 const AUTO_SYNC_INTERVAL_MS = 30000
 
@@ -68,9 +70,40 @@ function clearPendingSyncStorage(username = loggedInUser.value) {
   localStorage.removeItem(getPendingSyncStorageKey(username))
 }
 
-function loadSettledSolarTerms() {
+function getSolarTermStateStorageName(username = loggedInUser.value) {
+  return encodeURIComponent(String(username || 'anonymous'))
+}
+
+function getLastSeenSolarTermStorageKey(username = loggedInUser.value) {
+  return `${LAST_SEEN_SOLAR_TERM_STORAGE_PREFIX}:${getSolarTermStateStorageName(username)}`
+}
+
+function getSettledSolarTermsStorageKey(username = loggedInUser.value) {
+  return `${SETTLED_SOLAR_TERMS_STORAGE_PREFIX}:${getSolarTermStateStorageName(username)}`
+}
+
+function clearLegacySolarTermStorage() {
+  localStorage.removeItem(LAST_SEEN_SOLAR_TERM_STORAGE_PREFIX)
+  localStorage.removeItem(SETTLED_SOLAR_TERMS_STORAGE_PREFIX)
+}
+
+function loadLastSeenSolarTerm(username = loggedInUser.value) {
+  clearLegacySolarTermStorage()
+  return localStorage.getItem(getLastSeenSolarTermStorageKey(username)) || ''
+}
+
+function saveLastSeenSolarTerm(termName, username = loggedInUser.value) {
+  if (termName) {
+    localStorage.setItem(getLastSeenSolarTermStorageKey(username), termName)
+  } else {
+    localStorage.removeItem(getLastSeenSolarTermStorageKey(username))
+  }
+}
+
+function loadSettledSolarTerms(username = loggedInUser.value) {
+  clearLegacySolarTermStorage()
   try {
-    const saved = localStorage.getItem(SETTLED_SOLAR_TERMS_KEY)
+    const saved = localStorage.getItem(getSettledSolarTermsStorageKey(username))
     const parsed = saved ? JSON.parse(saved) : []
     return Array.isArray(parsed) ? parsed.filter((name) => typeof name === 'string' && name.trim()) : []
   } catch {
@@ -79,14 +112,19 @@ function loadSettledSolarTerms() {
 }
 
 function saveSettledSolarTerms() {
-  localStorage.setItem(SETTLED_SOLAR_TERMS_KEY, JSON.stringify(settledSolarTerms.value))
+  localStorage.setItem(getSettledSolarTermsStorageKey(), JSON.stringify(settledSolarTerms.value))
+}
+
+function reloadSolarTermStateForUser(username = loggedInUser.value) {
+  lastSeenSolarTerm.value = loadLastSeenSolarTerm(username)
+  settledSolarTerms.value = loadSettledSolarTerms(username)
 }
 
 // ==========================================
 // 🌟 新增：自动同步缓冲池 (存钱罐)
 // ==========================================
 const pendingSync = ref(loadPendingSyncFromStorage())
-const lastSeenSolarTerm = ref(localStorage.getItem(LAST_SEEN_SOLAR_TERM_KEY) || '')
+const lastSeenSolarTerm = ref(loadLastSeenSolarTerm())
 const settledSolarTerms = ref(loadSettledSolarTerms())
 let autoSyncTimer = null
 let autoSyncInFlight = false
@@ -103,6 +141,10 @@ function normalizeRegisteredAtFromData(data) {
   return parsedDate.toISOString()
 }
 
+function normalizeRoleFromData(data) {
+  return data?.isAdmin || data?.role === 'admin' ? 'admin' : 'user'
+}
+
 function setRegisteredAt(value) {
   userRegisteredAt.value = value || ''
   if (userRegisteredAt.value) {
@@ -112,12 +154,19 @@ function setRegisteredAt(value) {
   }
 }
 
+function setUserRole(role) {
+  userRole.value = role === 'admin' ? 'admin' : 'user'
+  localStorage.setItem('codeSproutRole', userRole.value)
+}
+
 function setAuthSession(token, username, sessionData = {}) {
   cloudToken.value = token
   loggedInUser.value = username
+  setUserRole(normalizeRoleFromData(sessionData))
   setRegisteredAt(normalizeRegisteredAtFromData(sessionData) || userRegisteredAt.value)
   localStorage.setItem('codeSproutToken', token)
   localStorage.setItem('codeSproutUser', username)
+  reloadSolarTermStateForUser(username)
 }
 
 function clearUserProfile() {
@@ -132,10 +181,17 @@ function clearAuthSession() {
   loggedInUser.value = ''
   isRestoringSession.value = false
   lastSyncTime.value = ''
+  lastSeenSolarTerm.value = ''
+  settledSolarTerms.value = []
+  isAdminUsersPanelOpen.value = false
+  adminUsers.value = []
+  adminUsersError.value = ''
   localStorage.removeItem('codeSproutToken')
   localStorage.removeItem('codeSproutUser')
+  localStorage.removeItem('codeSproutRole')
   localStorage.removeItem('codeSproutRegisteredAt')
   localStorage.removeItem('codeSproutLastSyncTime')
+  userRole.value = 'user'
   userRegisteredAt.value = ''
   clearUserProfile()
 }
@@ -151,6 +207,7 @@ function applyCloudSave(save) {
 
   if (typeof save.nickname === 'string') userNickname.value = save.nickname
   if (typeof save.birthday === 'string') userBirthday.value = save.birthday
+  if (save.role || save.isAdmin !== undefined) setUserRole(normalizeRoleFromData(save))
 
   const totalCodeLines = Number(save.totalCodeLines || 0)
   codeLines.value = totalCodeLines
@@ -350,6 +407,9 @@ function handleLogout() {
   isSettingsPanelOpen.value = false
   isCloudAccountPanelOpen.value = false
   isUserProfilePanelOpen.value = false
+  isAdminUsersPanelOpen.value = false
+  adminUsers.value = []
+  adminUsersError.value = ''
   isArchiveOpen.value = false
 
   authStatusMessage.value = '已退出登录，本地账号状态已彻底清空'
@@ -378,15 +438,21 @@ const syncedCodeLines = ref(0)
 const catExp = ref(0)
 const message = ref('🐱 睡觉中...')
 const isBubbleShaking = ref(false)
-let lastBubbleIndex = -1
+const lastBubbleIndexByState = {
+  play: -1,
+  sleep: -1
+}
 function shakeBubble() {
   if (isBubbleShaking.value) return
+  const stateKey = catState.value === 'play' ? 'play' : 'sleep'
+  const activeMessages = stateKey === 'play' ? bubbleMessages : sleepBubbleMessages
+  if (!activeMessages.length) return
   let idx
   do {
-    idx = Math.floor(Math.random() * bubbleMessages.length)
-  } while (idx === lastBubbleIndex && bubbleMessages.length > 1)
-  lastBubbleIndex = idx
-  message.value = bubbleMessages[idx]
+    idx = Math.floor(Math.random() * activeMessages.length)
+  } while (idx === lastBubbleIndexByState[stateKey] && activeMessages.length > 1)
+  lastBubbleIndexByState[stateKey] = idx
+  message.value = activeMessages[idx]
   isBubbleShaking.value = true
   setTimeout(() => { isBubbleShaking.value = false }, 400)
 }
@@ -403,6 +469,10 @@ const isStatsVisible = ref(true)
 const isSettingsPanelOpen = ref(false)
 const isCloudAccountPanelOpen = ref(false)
 const isUserProfilePanelOpen = ref(false)
+const isAdminUsersPanelOpen = ref(false)
+const adminUsers = ref([])
+const isAdminUsersLoading = ref(false)
+const adminUsersError = ref('')
 const userNickname = ref('')
 const userBirthday = ref('')
 
@@ -424,7 +494,7 @@ const catState = ref('sleep')
 function createSequentialFrames(folderName, filePrefix, frameCount, padLength) {
   return Array.from({ length: frameCount }, (_, index) => {
     const suffix = String(index + 1).padStart(padLength, '0')
-    return new URL(`./assets/Cat/${folderName}/${filePrefix}_${suffix}.png`, import.meta.url).href
+    return new URL(`./assets/Cat/${folderName}/${filePrefix}_${suffix}.webp`, import.meta.url).href
   })
 }
 
@@ -436,10 +506,10 @@ const jumpFrames = createSequentialFrames('cat_jump', 'cat_jump', 8, 1)
 const walkFrames = createSequentialFrames('cat_walk', 'walk', 10, 2)
 
 const catImages = {
-  eating: new URL('./assets/Cat/cat_eat.png', import.meta.url).href,
-  happy: new URL('./assets/Cat/cat_happy.png', import.meta.url).href,
-  refused: new URL('./assets/Cat/cat_sad.png', import.meta.url).href,
-  lifted: new URL('./assets/Cat/cat_lifted.png', import.meta.url).href 
+  eating: new URL('./assets/Cat/cat_eat.webp', import.meta.url).href,
+  happy: new URL('./assets/Cat/cat_happy.webp', import.meta.url).href,
+  refused: new URL('./assets/Cat/cat_sad.webp', import.meta.url).href,
+  lifted: new URL('./assets/Cat/cat_lifted.webp', import.meta.url).href 
 }
 
 // 动画播放下标
@@ -450,19 +520,17 @@ const currentJumpFrame = ref(0)
 const currentWalkFrame = ref(0)
 
 const CAT_MESSAGES = {
-  sleep: '🐱 睡觉中...',
+  sleep: '🐱 猫猫玩累了，正在睡觉中...',
   play: '😺 充满活力，玩耍中！',
   eating: '😺 吧唧吧唧...猫粮真香！(经验+10)',
   happy: '❤️ 呼噜呼噜...最喜欢你了！',
   refused: '😿 喵...肚子饿，可是猫粮不足 10 份！',
-  lifted: '哇！起飞啦~',
-  landed: '稳稳落地！继续玩耍~',
-  watering: '🌱 咕噜咕噜...水好甜！'
+  watering: '😺 咕噜咕噜...水好甜！'
 }
 
 const BASE_CAT_STATES = new Set(['sleep', 'play'])
 
-const actionStates = new Set(['eating', 'happy', 'refused', 'stretching', 'jumping', 'lifted'])
+const actionStates = new Set(['eating', 'happy', 'refused', 'stretching', 'jumping'])
 
 function getBaseCatState() {
   return lastFedDate.value === getTodayString() ? 'play' : 'sleep'
@@ -528,7 +596,7 @@ function syncCatStateToBase() {
 
 // 动态计算当前的猫咪图片
 const currentCatImage = computed(() => {
-  if (catState.value === 'lifted') return catImages.lifted || sleepFrames[0]
+  if (isFloatingMode.value && catState.value === 'lifted') return catImages.lifted || sleepFrames[0]
   if (isFloatingMode.value) return walkFrames[currentWalkFrame.value]
   if (catState.value === 'sleep') return sleepFrames[currentSleepFrame.value]
   if (catState.value === 'play') return playFrames[currentPlayFrame.value]
@@ -686,7 +754,7 @@ function feedCat() {
 }
 
 function interactWithCat() {
-  if (catState.value === 'eating' || catState.value === 'lifted') return 
+  if (catState.value === 'eating' || (isFloatingMode.value && catState.value === 'lifted')) return 
 
   setCatState('happy', CAT_MESSAGES.happy)
   resetCatState(2000)
@@ -716,6 +784,8 @@ function waterPlant() {
 }
 
 function resetToday() {
+  if (!isAdmin.value) return
+
   // 重置今日统计
   feedCount.value = 0
   waterCount.value = 0
@@ -980,6 +1050,7 @@ function openSettings() {
 function closeSettings() {
   isSettingsPanelOpen.value = false
   isCloudAccountPanelOpen.value = false
+  isAdminUsersPanelOpen.value = false
 }
 
 function openCloudAccountPanel() {
@@ -996,6 +1067,35 @@ function openUserProfilePanel() {
 
 function closeUserProfilePanel() {
   isUserProfilePanelOpen.value = false
+}
+
+async function openAdminUsersPanel() {
+  if (!isAdmin.value || !cloudToken.value) return
+
+  isAdminUsersPanelOpen.value = true
+  adminUsersError.value = ''
+  isAdminUsersLoading.value = true
+
+  try {
+    const result = await fetchAdminUsers(cloudToken.value)
+    adminUsers.value = Array.isArray(result.data) ? result.data : []
+  } catch (error) {
+    if (error.status === 401) clearAuthSession()
+    adminUsersError.value = `用户数据加载失败：${error.message}`
+  } finally {
+    isAdminUsersLoading.value = false
+  }
+}
+
+function closeAdminUsersPanel() {
+  isAdminUsersPanelOpen.value = false
+}
+
+function formatAdminDate(value) {
+  if (!value) return '暂无'
+  const parsed = new Date(value)
+  if (!isValidDateObj(parsed)) return '暂无'
+  return parsed.toLocaleString()
 }
 
 async function saveUserProfile() {
@@ -1216,6 +1316,8 @@ function markSolarTermSettled(termName) {
 }
 
 function checkSolarTermTransition() {
+  if (isSandboxActive.value) return
+
   const termName = currentSolarTerm.value
   if (!termName) return
 
@@ -1224,7 +1326,7 @@ function checkSolarTermTransition() {
   }
 
   lastSeenSolarTerm.value = termName
-  localStorage.setItem(LAST_SEEN_SOLAR_TERM_KEY, termName)
+  saveLastSeenSolarTerm(termName)
 }
 
 function getDefaultArchiveTermKey() {
@@ -1244,13 +1346,13 @@ function getDefaultArchiveTermKey() {
 
 const DEFAULT_PLANT_TERM = 'xiazhi'
 const DEFAULT_PLANT_STAGE = 1
-const plantImageModules = import.meta.glob('./assets/*/stage*.png', {
+const plantImageModules = import.meta.glob('./assets/*/stage*.webp', {
   eager: true,
   import: 'default'
 })
 // 未解锁 / 已解锁 图标集合（按文件名匹配节气拼音）
-const lockedModules = import.meta.glob('./assets/locked/*.png', { eager: true, import: 'default' })
-const unlockedModules = import.meta.glob('./assets/unlocked/*.png', { eager: true, import: 'default' })
+const lockedModules = import.meta.glob('./assets/locked/*.webp', { eager: true, import: 'default' })
+const unlockedModules = import.meta.glob('./assets/unlocked/*.webp', { eager: true, import: 'default' })
 
 function getArchiveCellImage(termKey, hasRecord) {
   const modules = hasRecord ? unlockedModules : lockedModules
@@ -1272,15 +1374,15 @@ function getArchiveCellImage(termKey, hasRecord) {
   // 3. 宁可空白也绝不错位
   return ''
 }
-const harvestImageModules = import.meta.glob('./assets/harvest/*/stage*.png', {
+const harvestImageModules = import.meta.glob('./assets/harvest/*/stage*.webp', {
   eager: true,
   import: 'default'
 })
-const solarTermImageModules = import.meta.glob('./assets/SolarTerm/*.png', {
+const solarTermImageModules = import.meta.glob('./assets/SolarTerm/*.webp', {
   eager: true,
   import: 'default'
 })
-const fallbackHarvestImage = new URL('./assets/harvest/harvest-seedling.png', import.meta.url).href
+const fallbackHarvestImage = new URL('./assets/harvest/harvest-seedling.webp', import.meta.url).href
 const harvestTierRank = {
   seedling: 1,
   mature: 2,
@@ -1324,9 +1426,9 @@ const currentBgUrl = computed(() => {
   const termName = (currentSolarTerm.value || '').trim();
   const pinyin = solarTermMap[termName];
   if (pinyin) {
-    return new URL(`./assets/SolarTerm/${pinyin}.png`, import.meta.url).href;
+    return new URL(`./assets/SolarTerm/${pinyin}.webp`, import.meta.url).href;
   }
-  return new URL('./assets/background.png', import.meta.url).href;
+  return new URL('./assets/background.webp', import.meta.url).href;
 })
 
 function getPlantStageByWaterings(waterings) {
@@ -1376,8 +1478,8 @@ function buildHarvestMessage(plantName, stage) {
 function getHarvestImageUrlByHarvestStage(termKey, harvestStage) {
   const safeTermKey = solarTermEntries.some((term) => term.key === termKey) ? termKey : DEFAULT_PLANT_TERM
   const safeHarvestStage = Math.max(1, Math.min(3, Number(harvestStage) || 1))
-  const imageKey = `./assets/harvest/${safeTermKey}/stage${safeHarvestStage}.png`
-  const fallbackKey = `./assets/harvest/${DEFAULT_PLANT_TERM}/stage1.png`
+  const imageKey = `./assets/harvest/${safeTermKey}/stage${safeHarvestStage}.webp`
+  const fallbackKey = `./assets/harvest/${DEFAULT_PLANT_TERM}/stage1.webp`
 
   return harvestImageModules[imageKey] || harvestImageModules[fallbackKey] || fallbackHarvestImage
 }
@@ -1457,7 +1559,7 @@ const canGenerateSelectedTermReport = computed(() => {
 
 const selectedArchiveSolarTermImage = computed(() => {
   if (!selectedArchiveTerm.value || (!selectedArchiveHasArchiveContent.value && !selectedArchiveIsCurrentTerm.value)) return ''
-  return solarTermImageModules[`./assets/SolarTerm/${selectedArchiveTerm.value.key}.png`] || ''
+  return solarTermImageModules[`./assets/SolarTerm/${selectedArchiveTerm.value.key}.webp`] || ''
 })
 
 const archiveCells = computed(() => {
@@ -1588,11 +1690,11 @@ const plantImageConfig = {
 };
 
 function getPlantImageUrl(termKey, stage) {
-  const imageKey = `./assets/${termKey}/stage${stage}.png`
-  const fallbackKey = `./assets/${DEFAULT_PLANT_TERM}/stage${DEFAULT_PLANT_STAGE}.png`
+  const imageKey = `./assets/${termKey}/stage${stage}.webp`
+  const fallbackKey = `./assets/${DEFAULT_PLANT_TERM}/stage${DEFAULT_PLANT_STAGE}.webp`
 
   if (plantImageModules[imageKey]) return plantImageModules[imageKey]
-  return plantImageModules[fallbackKey] || new URL('./assets/xiazhi/stage1.png', import.meta.url).href
+  return plantImageModules[fallbackKey] || new URL('./assets/xiazhi/stage1.webp', import.meta.url).href
 }
 
 const currentPlant = computed(() => {
@@ -1710,6 +1812,8 @@ function restoreSnapshot(snapshot) {
 }
 
 function openTimeMachine() {
+  if (!isAdmin.value) return
+
   const parsed = parseYmdString(mockDateString.value)
   const base = parsed ? makeLocalDate(parsed.y, parsed.m, parsed.d) : now.value
   tmYear.value = String(base.getFullYear())
@@ -1726,6 +1830,8 @@ function closeTimeMachine() {
 }
 
 function applyTimeMachine() {
+  if (!isAdmin.value) return
+
   const parsed = validateTimeMachineDate()
   if (!parsed) return
 
@@ -1787,6 +1893,8 @@ function saveReportRecord(record) {
 }
 
 function simulateTermSettlement() {
+  if (!isAdmin.value) return
+
   const parsed = validateTimeMachineDate()
   if (!parsed) return
   if (!sandboxSnapshot.value) sandboxSnapshot.value = captureCurrentState()
@@ -1834,6 +1942,8 @@ function simulateTermSettlement() {
 }
 
 function exitTimeMachine() {
+  if (!isAdmin.value) return
+
   restoreSnapshot(sandboxSnapshot.value)
   sandboxSnapshot.value = null
   mockDateString.value = null
@@ -1976,6 +2086,11 @@ onUnmounted(() => {
           <span class="settings-menu-label">个人资料</span>
           <span class="settings-menu-arrow">→</span>
         </button>
+        <button v-if="isAdmin" class="settings-menu-item" @click="openAdminUsersPanel">
+          <span class="settings-menu-icon">📊</span>
+          <span class="settings-menu-label">用户数据</span>
+          <span class="settings-menu-arrow">→</span>
+        </button>
       </div>
     </div>
   </div>
@@ -2055,6 +2170,44 @@ onUnmounted(() => {
     </div>
   </div>
 
+  <!-- 第二层：管理员用户数据面板 -->
+  <div
+    v-if="isAdmin && isAdminUsersPanelOpen && !isFloatingMode"
+    class="admin-users-mask"
+    style="-webkit-app-region: no-drag;"
+    @click.self="closeAdminUsersPanel"
+  >
+    <div class="admin-users-panel" style="-webkit-app-region: no-drag;">
+      <div class="admin-users-header">
+        <button class="admin-users-back" @click="closeAdminUsersPanel">← 返回</button>
+        <h2>用户数据</h2>
+        <button class="admin-users-refresh" :disabled="isAdminUsersLoading" @click="openAdminUsersPanel">刷新</button>
+      </div>
+
+      <div class="admin-users-content">
+        <div v-if="isAdminUsersLoading" class="admin-users-state">正在加载后端用户数据...</div>
+        <div v-else-if="adminUsersError" class="admin-users-state error">{{ adminUsersError }}</div>
+        <div v-else-if="adminUsers.length === 0" class="admin-users-state">暂无用户数据</div>
+        <div v-else class="admin-users-list">
+          <article v-for="user in adminUsers" :key="user.username" class="admin-user-card">
+            <div class="admin-user-card-header">
+              <strong>{{ user.username }}</strong>
+              <span>{{ user.nickname || '未设置昵称' }}</span>
+            </div>
+            <div class="admin-user-grid">
+              <div><span>代码行数</span><strong>{{ user.totalCodeLines || 0 }}</strong></div>
+              <div><span>猫粮</span><strong>{{ user.catFood || 0 }}</strong></div>
+              <div><span>水滴</span><strong>{{ user.waterDrops || 0 }}</strong></div>
+              <div><span>植物阶段</span><strong>{{ user.plantStage || 1 }}</strong></div>
+            </div>
+            <div class="admin-user-meta">注册时间：{{ formatAdminDate(user.registeredAt) }}</div>
+            <div class="admin-user-meta">最近同步：{{ formatAdminDate(user.lastSyncTime) }}</div>
+          </article>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div class="viewport-root" :class="{ 'floating-root': isFloatingMode }" :style="{ backgroundImage: `url(${currentBgUrl})` }">
     <WeatherEffect v-show="!isFloatingMode" :type="currentWeatherType" />
     <div 
@@ -2108,8 +2261,7 @@ onUnmounted(() => {
               'cat-refused': catState === 'refused',
               'cat-playing': catState === 'play',
               'cat-stretching': catState === 'stretching',
-              'cat-jumping': catState === 'jumping',
-              'cat-lifted': catState === 'lifted'
+              'cat-jumping': catState === 'jumping'
             }"
             :src="currentCatImage"
             draggable="false"
@@ -2131,12 +2283,12 @@ onUnmounted(() => {
       </div>
 
       <div v-show="!isFloatingMode" class="action-panel" style="-webkit-app-region: no-drag;">
-        <button class="image-btn" @click="feedCat" aria-label="喂猫粮"><img src="./assets/btn-feed.png" draggable="false"></button>
-        <button class="image-btn" @click="waterPlant" aria-label="浇水"><img src="./assets/btn-water.png" draggable="false"></button>
-        <button class="image-btn image-btn-archive" :class="{ glowing: hasNewHarvest || hasNewReport }" @click="openArchive" aria-label="节气档案"><img src="./assets/btn-gallery.png" draggable="false"></button>
-        <button class="image-btn image-btn-settings" @click="openSettings" aria-label="设置"><img src="./assets/btn-settings.png" draggable="false"></button>
-        <button class="image-btn" @click="openTimeMachine" aria-label="沙盘模式"><img src="./assets/btn_shapanmode.png" draggable="false"></button>
-        <button class="image-btn" @click="resetToday" aria-label="重置今日"><img src="./assets/btn-reset.png" draggable="false"></button>
+        <button class="image-btn" @click="feedCat" aria-label="喂猫粮"><img src="./assets/btn-feed.webp" draggable="false"></button>
+        <button class="image-btn" @click="waterPlant" aria-label="浇水"><img src="./assets/btn-water.webp" draggable="false"></button>
+        <button class="image-btn image-btn-archive" :class="{ glowing: hasNewHarvest || hasNewReport }" @click="openArchive" aria-label="节气档案"><img src="./assets/btn-gallery.webp" draggable="false"></button>
+        <button class="image-btn image-btn-settings" @click="openSettings" aria-label="设置"><img src="./assets/btn-settings.webp" draggable="false"></button>
+        <button v-if="isAdmin" class="image-btn" @click="openTimeMachine" aria-label="沙盘模式"><img src="./assets/btn_shapanmode.webp" draggable="false"></button>
+        <button v-if="isAdmin" class="image-btn" @click="resetToday" aria-label="重置今日"><img src="./assets/btn-reset.webp" draggable="false"></button>
       </div>
 
       <div
@@ -2310,7 +2462,7 @@ onUnmounted(() => {
       </div>
 
       <div
-        v-if="isTimeMachineOpen && !isFloatingMode"
+        v-if="isAdmin && isTimeMachineOpen && !isFloatingMode"
         class="time-machine-mask"
         style="-webkit-app-region: no-drag;"
         @click.self="closeTimeMachine"
@@ -2367,7 +2519,7 @@ onUnmounted(() => {
   color: #334331;
   background:
     linear-gradient(180deg, rgba(250, 252, 242, 0.78), rgba(229, 244, 224, 0.88)),
-    url('./assets/background.png') center / cover no-repeat;
+    url('./assets/background.webp') center / cover no-repeat;
   font-family: "Microsoft YaHei", sans-serif;
 }
 
@@ -2783,6 +2935,141 @@ onUnmounted(() => {
   border-color: #3f6f4a;
 }
 
+.admin-users-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 10001;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.4);
+}
+
+.admin-users-panel {
+  position: relative;
+  width: min(760px, 88vw);
+  max-height: 76vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 2px solid rgba(87, 124, 87, 0.35);
+  border-radius: 16px;
+  background: rgba(250, 252, 242, 0.98);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+}
+
+.admin-users-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 20px 24px;
+  border-bottom: 1px solid rgba(87, 124, 87, 0.15);
+  background: linear-gradient(135deg, rgba(134, 212, 152, 0.1), rgba(141, 200, 157, 0.05));
+}
+
+.admin-users-header h2 {
+  flex: 1;
+  margin: 0;
+  color: #3f6d4a;
+  font-size: 22px;
+  text-align: center;
+}
+
+.admin-users-back,
+.admin-users-refresh {
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: #4f8f5f;
+  cursor: pointer;
+  font-size: 14px;
+  padding: 6px 12px;
+}
+
+.admin-users-back:hover,
+.admin-users-refresh:hover {
+  background: rgba(87, 124, 87, 0.15);
+}
+
+.admin-users-refresh:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+.admin-users-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 18px 20px 22px;
+}
+
+.admin-users-state {
+  padding: 24px;
+  border-radius: 10px;
+  background: rgba(239, 244, 229, 0.86);
+  color: #4d5a45;
+  text-align: center;
+}
+
+.admin-users-state.error {
+  border-left: 3px solid #b75b54;
+  color: #8f3f38;
+}
+
+.admin-users-list {
+  display: grid;
+  gap: 12px;
+}
+
+.admin-user-card {
+  padding: 14px;
+  border: 1px solid rgba(87, 124, 87, 0.22);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.admin-user-card-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  color: #3f4a38;
+}
+
+.admin-user-card-header span {
+  color: #6b7568;
+  font-size: 13px;
+}
+
+.admin-user-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.admin-user-grid div {
+  padding: 10px;
+  border-radius: 8px;
+  background: rgba(239, 244, 229, 0.72);
+}
+
+.admin-user-grid span,
+.admin-user-meta {
+  color: #6b7568;
+  font-size: 12px;
+}
+
+.admin-user-grid strong {
+  display: block;
+  margin-top: 5px;
+  color: #3f6d4a;
+  font-size: 18px;
+}
+
+.admin-user-meta + .admin-user-meta {
+  margin-top: 4px;
+}
+
 .pet-container {
   --ui-bg: rgba(134, 212, 152, 0.88);
   --ui-bg-hover: rgba(141, 200, 157, 0.93);
@@ -2867,7 +3154,7 @@ onUnmounted(() => {
     top 0.3s ease,
     left 0.3s ease,
     transform 0.3s ease;
-  background-image: url('./assets/stats-expanded.png');
+  background-image: url('./assets/stats-expanded.webp');
   background-repeat: no-repeat;
   background-position: center;
   background-size: 100% 100%;
@@ -2882,7 +3169,7 @@ onUnmounted(() => {
   width: 0;
   height: 0;
   overflow: hidden;
-  background-image: url('./assets/stats-expanded.png'), url('./assets/stats-collapsed.png');
+  background-image: url('./assets/stats-expanded.webp'), url('./assets/stats-collapsed.webp');
   pointer-events: none;
 }
 
@@ -2915,7 +3202,7 @@ onUnmounted(() => {
 }
 
 .stats-box.collapsed {
-  background-image: url('./assets/stats-collapsed.png') !important;
+  background-image: url('./assets/stats-collapsed.webp') !important;
   background-color: transparent;
   background-repeat: no-repeat;
   background-position: center;
@@ -3007,7 +3294,7 @@ onUnmounted(() => {
   align-items: center;
   justify-content: center;
   background: transparent;
-  background-image: url('./assets/date-banner.png');
+  background-image: url('./assets/date-banner.webp');
   background-repeat: no-repeat;
   background-position: center;
   background-size: 100% 100%;
@@ -3040,10 +3327,10 @@ onUnmounted(() => {
   position: absolute;
   left: 43%;
   white-space: nowrap;
-  background: url('./assets/speech_bubble.png') no-repeat center;
+  background: url('./assets/speech_bubble.webp') no-repeat center;
   background-size: 100% 100%;
   color: #333;
-  padding: 35px 45px 25px;
+  padding: 15px 25px 20px;
   font-weight: bold;
   font-size: 14px;
   pointer-events: auto;
@@ -3219,7 +3506,9 @@ onUnmounted(() => {
 .archive-book-panel {
   --archive-height: 80vh;
   position: relative;
-  width: 1000px;
+  /* 响应式宽度：在小屏幕下收缩，但在大屏幕保持 1000px */
+  width: min(1000px, 95%);
+  max-width: 1000px;
   height: var(--archive-height);
   max-height: 820px;
   padding: 18px 20px 20px;
@@ -3309,18 +3598,41 @@ onUnmounted(() => {
 .archive-grid {
   display: grid;
   grid-template-columns: repeat(6, 58px);
-  grid-template-rows: repeat(4, 68px);
+  grid-auto-rows: 68px;
   justify-content: center;
   gap: 25px 7px;
   margin: 0;
-  align-content: center;
+  align-content: start; /* 从顶部开始，方便滚动 */
 }
 
-/* 保证左侧页内的格子在容器中垂直和水平居中 */
+/* 左侧页：允许在高度受限时滚动 */
 .archive-left-page {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* 使左侧滚动条与右侧详情滚动条样式一致 */
+.archive-left-page {
+  scrollbar-color: #d89d58 rgba(225, 202, 163, 0.5);
+  scrollbar-width: thin;
+}
+
+.archive-left-page::-webkit-scrollbar {
+  width: 9px;
+}
+
+.archive-left-page::-webkit-scrollbar-track {
+  border-radius: 999px;
+  background: rgba(225, 202, 163, 0.42);
+}
+
+.archive-left-page::-webkit-scrollbar-thumb {
+  border: 2px solid rgba(246, 235, 211, 0.88);
+  border-radius: 999px;
+  background: #d89d58;
 }
 
 .archive-cell-img {
@@ -3417,7 +3729,9 @@ onUnmounted(() => {
 
 .archive-detail-scroll {
   width: 100%;
-  max-height: 408px;
+  /* 使用 flex 布局自动占用剩余高度，并在内容溢出时滚动 */
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
   padding: 16px 10px 4px;
   scrollbar-color: #d89d58 rgba(225, 202, 163, 0.5);
@@ -3829,14 +4143,7 @@ onUnmounted(() => {
 }
 
 /* 5. 拖拽悬空 */
-.cat-lifted {
-  animation: dangle 0.6s ease-in-out infinite alternate;
-  transform-origin: top center;
-}
-@keyframes dangle {
-  from { transform: rotate(-8deg) translateY(-10px); }
-  to { transform: rotate(8deg) translateY(-10px); }
-}
+/* 主页面不再使用 cat-lifted 视觉效果；悬浮窗仍可使用消息文案 */
 </style>
 
 <style>
