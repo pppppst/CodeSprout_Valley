@@ -6,6 +6,7 @@
   "author": "example.com",
   "homepage": "https://electron-vite.org",
   "scripts": {
+    "assets:webp": "python scripts/convert-images-webp.py --quality 85",
     "format": "prettier --write .",
     "lint": "eslint --cache .",
     "start": "electron-vite preview",

@@ -1,31 +1,31 @@
 require('dotenv').config()
 
-//  新增：2026 年二十四节气标准时间表 (UTC格式，用于防绕过校验)
+// 新增：2026 年二十四节气标准时间表 (已统一使用北京时间 +08:00 防止时区偏差)
 const SOLAR_TERMS_2026 = {
-  '小寒': { start: '2026-01-05T00:00:00Z', end: '2026-01-20T00:00:00Z' },
-  '大寒': { start: '2026-01-20T00:00:00Z', end: '2026-02-04T00:00:00Z' },
-  '立春': { start: '2026-02-04T00:00:00Z', end: '2026-02-18T00:00:00Z' },
-  '雨水': { start: '2026-02-18T00:00:00Z', end: '2026-03-05T00:00:00Z' },
-  '惊蛰': { start: '2026-03-05T00:00:00Z', end: '2026-03-20T00:00:00Z' },
-  '春分': { start: '2026-03-20T00:00:00Z', end: '2026-04-04T00:00:00Z' },
-  '清明': { start: '2026-04-04T00:00:00Z', end: '2026-04-19T00:00:00Z' },
-  '谷雨': { start: '2026-04-19T00:00:00Z', end: '2026-05-05T00:00:00Z' },
-  '立夏': { start: '2026-05-05T00:00:00Z', end: '2026-05-21T00:00:00Z' },
-  '小满': { start: '2026-05-21T00:00:00Z', end: '2026-06-05T00:00:00Z' },
-  '芒种': { start: '2026-06-05T00:00:00Z', end: '2026-06-21T00:00:00Z' },
-  '夏至': { start: '2026-06-21T00:00:00Z', end: '2026-07-07T00:00:00Z' },
-  '小暑': { start: '2026-07-07T00:00:00Z', end: '2026-07-23T00:00:00Z' },
-  '大暑': { start: '2026-07-23T00:00:00Z', end: '2026-08-07T00:00:00Z' },
-  '立秋': { start: '2026-08-07T00:00:00Z', end: '2026-08-23T00:00:00Z' },
-  '处暑': { start: '2026-08-23T00:00:00Z', end: '2026-09-07T00:00:00Z' },
-  '白露': { start: '2026-09-07T00:00:00Z', end: '2026-09-23T00:00:00Z' },
-  '秋分': { start: '2026-09-23T00:00:00Z', end: '2026-10-08T00:00:00Z' },
-  '寒露': { start: '2026-10-08T00:00:00Z', end: '2026-10-23T00:00:00Z' },
-  '霜降': { start: '2026-10-23T00:00:00Z', end: '2026-11-07T00:00:00Z' },
-  '立冬': { start: '2026-11-07T00:00:00Z', end: '2026-11-22T00:00:00Z' },
-  '小雪': { start: '2026-11-22T00:00:00Z', end: '2026-12-07T00:00:00Z' },
-  '大雪': { start: '2026-12-07T00:00:00Z', end: '2026-12-21T00:00:00Z' },
-  '冬至': { start: '2026-12-21T00:00:00Z', end: '2027-01-05T00:00:00Z' }
+  '小寒': { start: '2026-01-05T00:00:00+08:00', end: '2026-01-20T00:00:00+08:00' },
+  '大寒': { start: '2026-01-20T00:00:00+08:00', end: '2026-02-04T00:00:00+08:00' },
+  '立春': { start: '2026-02-04T00:00:00+08:00', end: '2026-02-18T00:00:00+08:00' },
+  '雨水': { start: '2026-02-18T00:00:00+08:00', end: '2026-03-05T00:00:00+08:00' },
+  '惊蛰': { start: '2026-03-05T00:00:00+08:00', end: '2026-03-20T00:00:00+08:00' },
+  '春分': { start: '2026-03-20T00:00:00+08:00', end: '2026-04-04T00:00:00+08:00' },
+  '清明': { start: '2026-04-04T00:00:00+08:00', end: '2026-04-19T00:00:00+08:00' },
+  '谷雨': { start: '2026-04-19T00:00:00+08:00', end: '2026-05-05T00:00:00+08:00' },
+  '立夏': { start: '2026-05-05T00:00:00+08:00', end: '2026-05-21T00:00:00+08:00' },
+  '小满': { start: '2026-05-21T00:00:00+08:00', end: '2026-06-05T00:00:00+08:00' },
+  '芒种': { start: '2026-06-05T00:00:00+08:00', end: '2026-06-21T00:00:00+08:00' },
+  '夏至': { start: '2026-06-21T00:00:00+08:00', end: '2026-07-07T00:00:00+08:00' },
+  '小暑': { start: '2026-07-07T00:00:00+08:00', end: '2026-07-23T00:00:00+08:00' },
+  '大暑': { start: '2026-07-23T00:00:00+08:00', end: '2026-08-07T00:00:00+08:00' },
+  '立秋': { start: '2026-08-07T00:00:00+08:00', end: '2026-08-23T00:00:00+08:00' },
+  '处暑': { start: '2026-08-23T00:00:00+08:00', end: '2026-09-07T00:00:00+08:00' },
+  '白露': { start: '2026-09-07T00:00:00+08:00', end: '2026-09-23T00:00:00+08:00' },
+  '秋分': { start: '2026-09-23T00:00:00+08:00', end: '2026-10-08T00:00:00+08:00' },
+  '寒露': { start: '2026-10-08T00:00:00+08:00', end: '2026-10-23T00:00:00+08:00' },
+  '霜降': { start: '2026-10-23T00:00:00+08:00', end: '2026-11-07T00:00:00+08:00' },
+  '立冬': { start: '2026-11-07T00:00:00+08:00', end: '2026-11-22T00:00:00+08:00' },
+  '小雪': { start: '2026-11-22T00:00:00+08:00', end: '2026-12-07T00:00:00+08:00' },
+  '大雪': { start: '2026-12-07T00:00:00+08:00', end: '2026-12-21T00:00:00+08:00' },
+  '冬至': { start: '2026-12-21T00:00:00+08:00', end: '2027-01-05T00:00:00+08:00' }
 }
 
 const express = require('express')
@@ -42,6 +42,8 @@ const app = express()
 const PORT = process.env.PORT || 3000
 const MONGO_URI = process.env.MONGO_URI
 const JWT_SECRET = process.env.JWT_SECRET
+const ADMIN_USERNAME = String(process.env.ADMIN_USERNAME || '').trim()
+const ADMIN_PASSWORD = String(process.env.ADMIN_PASSWORD || '')
 
 app.use(cors())
 app.use(express.json())
@@ -57,16 +59,38 @@ if (!JWT_SECRET) {
 }
 
 mongoose.connect(MONGO_URI, { serverSelectionTimeoutMS: 5000 })
-  .then(() => console.log('MongoDB connected'))
+  .then(async () => {
+    console.log('MongoDB connected')
+    await ensureAdminAccount()
+  })
   .catch((err) => {
     console.error('MongoDB connection failed:', err.message)
     process.exit(1)
   })
 
 function sanitizeUser(user) {
-  //  提取可靠的注册时间：优先取 createdAt，没有的话从 _id 里强行解析
   const registrationDate = user.createdAt || user._id.getTimestamp()
-  
+  const role = user.role === 'admin' ? 'admin' : 'user'
+
+  return {
+    username: user.username,
+    role,
+    isAdmin: role === 'admin',
+    nickname: user.nickname || '',
+    birthday: user.birthday || '',
+    totalCodeLines: user.totalCodeLines || 0,
+    catFood: user.catFood || 0,
+    waterDrops: user.waterDrops || 0,
+    plantStage: user.plantStage || 1,
+    lastSyncTime: user.lastSyncTime,
+    registeredAt: registrationDate.toISOString(),
+    updatedAt: user.updatedAt
+  }
+}
+
+function sanitizeAdminUser(user) {
+  const registrationDate = user.createdAt || user._id.getTimestamp()
+
   return {
     username: user.username,
     nickname: user.nickname || '',
@@ -76,8 +100,48 @@ function sanitizeUser(user) {
     waterDrops: user.waterDrops || 0,
     plantStage: user.plantStage || 1,
     lastSyncTime: user.lastSyncTime,
-    registeredAt: registrationDate.toISOString() //  返回给前端
+    registeredAt: registrationDate.toISOString(),
+    updatedAt: user.updatedAt
   }
+}
+
+async function ensureAdminAccount() {
+  if (!ADMIN_USERNAME || !ADMIN_PASSWORD) {
+    console.log('Admin account initialization skipped: ADMIN_USERNAME or ADMIN_PASSWORD is not set.')
+    return
+  }
+
+  if (ADMIN_USERNAME.length > 32 || ADMIN_PASSWORD.length < 6) {
+    console.warn('Admin account initialization skipped: username must be at most 32 chars and password at least 6 chars.')
+    return
+  }
+
+  const existingAdmin = await User.findOne({ username: ADMIN_USERNAME })
+  const salt = await bcrypt.genSalt(10)
+
+  if (!existingAdmin) {
+    const hashedPassword = await bcrypt.hash(ADMIN_PASSWORD, salt)
+    await User.create({
+      username: ADMIN_USERNAME,
+      password: hashedPassword,
+      role: 'admin',
+      totalCodeLines: 0,
+      catFood: 0,
+      waterDrops: 0,
+      plantStage: 1
+    })
+    console.log(`Admin account created: ${ADMIN_USERNAME}`)
+    return
+  }
+
+  const update = { role: 'admin' }
+  const passwordMatches = await bcrypt.compare(ADMIN_PASSWORD, existingAdmin.password)
+  if (!passwordMatches) {
+    update.password = await bcrypt.hash(ADMIN_PASSWORD, salt)
+  }
+
+  await User.updateOne({ _id: existingAdmin._id }, { $set: update })
+  console.log(`Admin account ready: ${ADMIN_USERNAME}`)
 }
 
 function authenticateToken(req, res, next) {
@@ -93,6 +157,25 @@ function authenticateToken(req, res, next) {
     next()
   } catch {
     return res.status(401).json({ success: false, message: 'Login expired, please log in again.' })
+  }
+}
+
+async function authenticateAdmin(req, res, next) {
+  try {
+    const user = await User.findById(req.auth.userId)
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User save not found.' })
+    }
+
+    if (user.role !== 'admin') {
+      return res.status(403).json({ success: false, message: 'Admin permission is required.' })
+    }
+
+    req.adminUser = user
+    next()
+  } catch (error) {
+    console.error('Admin auth failed:', error)
+    res.status(500).json({ success: false, message: 'Server error.' })
   }
 }
 
@@ -128,6 +211,7 @@ app.post('/api/register', async (req, res) => {
     const newUser = new User({
       username,
       password: hashedPassword,
+      role: 'user',
       totalCodeLines: 0,
       catFood: 0,
       waterDrops: 0,
@@ -162,7 +246,7 @@ app.post('/api/login', async (req, res) => {
     }
 
     const token = jwt.sign(
-      { userId: user._id.toString(), username: user.username },
+      { userId: user._id.toString(), username: user.username, role: user.role === 'admin' ? 'admin' : 'user' },
       JWT_SECRET,
       { expiresIn: '7d' }
     )
@@ -235,6 +319,16 @@ app.get('/api/user/me', authenticateToken, async (req, res) => {
   }
 })
 
+app.get('/api/admin/users', authenticateToken, authenticateAdmin, async (req, res) => {
+  try {
+    const users = await User.find({}).sort({ createdAt: -1, username: 1 })
+    res.json({ success: true, data: users.map(sanitizeAdminUser) })
+  } catch (error) {
+    console.error('Fetch admin users failed:', error)
+    res.status(500).json({ success: false, message: 'Server error.' })
+  }
+})
+
 app.patch('/api/user/profile', authenticateToken, async (req, res) => {
   try {
     const nickname = String(req.body.nickname || '').trim().slice(0, 20)
@@ -289,6 +383,12 @@ app.post('/api/term-stats', authenticateToken, async (req, res) => {
 
     if (![codeLines, commitCount, errorCount].every(isNonNegativeFiniteNumber)) {
       return res.status(400).json({ success: false, message: 'Term stats values must be non-negative numbers.' })
+    }
+
+    // 白名单拦截：无效节气名称直接拒绝
+    const termSchedule = SOLAR_TERMS_2026[solarTerm]
+    if (!termSchedule) {
+      return res.status(400).json({ success: false, message: '无效的节气标识' })
     }
 
     const updatedStat = await TermDailyStat.findOneAndUpdate(
@@ -364,26 +464,29 @@ app.post('/api/reports', authenticateToken, async (req, res) => {
       return res.status(400).json({ success: false, message: 'Report payload is incomplete.' })
     }
 
-    //  防绕过校验逻辑开始
+    // 防绕过校验逻辑开始
     const user = await User.findById(userId)
     if (!user) return res.status(404).json({ success: false, message: 'User not found.' })
     
+    // 白名单拦截：非法节气名称直接拒绝
     const termSchedule = SOLAR_TERMS_2026[solarTerm]
-    if (termSchedule) {
-      const termEndTime = new Date(termSchedule.end).getTime()
-      const userRegTime = (user.createdAt || user._id.getTimestamp()).getTime()
-      const nowTime = Date.now()
-
-      // 规则1: 节气还没彻底结束，不能提前生成报告
-      if (nowTime < termEndTime) {
-        return res.status(403).json({ success: false, message: `The solar term [${solarTerm}] has not ended yet. Cannot generate report.` })
-      }
-      // 规则2: 节气在用户注册前就已经结束了，拒绝蹭历史成就
-      if (userRegTime > termEndTime) {
-        return res.status(403).json({ success: false, message: `The solar term [${solarTerm}] ended before your account was registered.` })
-      }
+    if (!termSchedule) {
+      return res.status(400).json({ success: false, message: '非法操作：该节气名称不存在于白名单中' })
     }
-    //  防绕过校验逻辑结束
+    
+    const termEndTime = new Date(termSchedule.end).getTime()
+    const userRegTime = (user.createdAt || user._id.getTimestamp()).getTime()
+    const nowTime = Date.now()
+
+    // 规则1: 节气还没彻底结束，不能提前生成报告
+    if (nowTime < termEndTime) {
+      return res.status(403).json({ success: false, message: `The solar term [${solarTerm}] has not ended yet. Cannot generate report.` })
+    }
+    // 规则2: 节气在用户注册前就已经结束了，拒绝蹭历史成就
+    if (userRegTime > termEndTime) {
+      return res.status(403).json({ success: false, message: `The solar term [${solarTerm}] ended before your account was registered.` })
+    }
+    // 防绕过校验逻辑结束
 
     const stats = await TermDailyStat.find({ userId, solarTerm }).sort({ date: 1 })
 
@@ -424,12 +527,15 @@ app.get('/api/reports', authenticateToken, async (req, res) => {
     if (!user) return res.status(404).json({ success: false, message: 'User not found.' })
     const userRegTime = (user.createdAt || user._id.getTimestamp()).getTime()
 
+    // 修复乱码：恢复正常的数据库查询
     const allReports = await TermReport.find(query).sort({ createdAt: -1 })
     
-    //  脏数据过滤：只返回注册后经历过的节气报告
+    // 脏数据过滤：只返回合法且注册后经历过的节气报告
     const validReports = allReports.filter(report => {
       const termSchedule = SOLAR_TERMS_2026[report.solarTerm]
-      if (!termSchedule) return true // 找不到时间表的放行
+      
+      // 白名单防线：找不到时间表的是非法脏数据，坚决丢弃 (return false)
+      if (!termSchedule) return false 
       
       const termEndTime = new Date(termSchedule.end).getTime()
       // 如果节气在用户注册之前就结束了，这个报告就是非法历史数据，丢弃
@@ -469,7 +575,7 @@ async function migrateOldUsers() {
         // 从 _id 提取精确到秒的真实注册时间
         const trueTime = user._id.getTimestamp()
         
-        // 🌟 终极大招：User.collection 直接调用原生 MongoDB 驱动！
+        // 终极大招：User.collection 直接调用原生 MongoDB 驱动！
         // 它会彻底无视 Mongoose 的 immutable (不可变) 保护
         await User.collection.updateOne(
           { _id: user._id },
