@@ -12,8 +12,6 @@ import { ref } from 'vue'
  * @param {Function} deps.startBaseAnimation
  * @param {Function} deps.clearActionInterval
  * @param {Function} deps.clearCatStateTimer
- * @param {import('vue').Ref<string>} deps.message
- * @param {object} deps.CAT_MESSAGES
  */
 export function useFloatingWindow(deps) {
   const {
@@ -24,8 +22,6 @@ export function useFloatingWindow(deps) {
     startBaseAnimation,
     clearActionInterval,
     clearCatStateTimer,
-    message,
-    CAT_MESSAGES
   } = deps
 
   // ============ 状态 ============
@@ -67,12 +63,11 @@ export function useFloatingWindow(deps) {
   function handleDragStart() {
     if (!isFloatingMode.value) return
     clearCatStateTimer()
-    setCatState('lifted', CAT_MESSAGES.lifted)
+    setCatState('lifted')
   }
 
   function handleDragEnd() {
     restoreBaseCatState()
-    message.value = CAT_MESSAGES.landed
     resetCatState(2000)
   }
 

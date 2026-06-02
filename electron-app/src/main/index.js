@@ -174,12 +174,6 @@ function createFloatingWindow() {
 
   const floatMenu = Menu.buildFromTemplate([
     { label: '返回主界面', click: () => restoreMainInterface() },
-    { label: '猫咪换动作', click: () => {
-        if (floatingWindow && !floatingWindow.isDestroyed()) {
-          floatingWindow.webContents.send('change-cat-action')
-        }
-      }
-    }
   ])
 
   floatingWindow.webContents.on('context-menu', (event) => {
@@ -288,7 +282,9 @@ app.whenReady().then(() => {
   })
 
   ipcMain.handle('activity:get-latest', () => {
-    return latestPluginActivity
+    return {
+      timestamp: latestPluginActivity.timestamp
+    }
   })
 
   app.on('activate', function () {

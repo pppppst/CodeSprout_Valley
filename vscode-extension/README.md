@@ -1,11 +1,12 @@
 # CodeSprout Valley Tracker
 
-CodeSprout Valley Tracker 是一个 VS Code 扩展，用于收集用户在 VS Code 中的编程活动，并将统计结果上报给 CodeSprout Valley Electron 桌面应用。
+CodeSprout Valley Tracker 是一个 VS Code 扩展，用于收集用户在 VS Code 中的编程活动，并将增量统计结果上报给 CodeSprout Valley Electron 桌面应用。
 
-插件当前主要统计三类数据：
+插件当前统计的数据包括：
 
 - 代码新增行数
-- 代码诊断结果，包括错误次数和通过次数
+- 活跃文件数增量
+- 修复行为次数增量
 - 编程活跃时长
 
 ## 功能
@@ -16,24 +17,78 @@ CodeSprout Valley Tracker 是一个 VS Code 扩展，用于收集用户在 VS Co
 
 当同一个文件本次保存后的行数大于上次记录的行数时，差值会被计入 `codeAdded`。插件只统计新增行数，不会因为删除代码而扣减历史数据。
 
-### 错误与通过统计
+### 活跃文件数统计
 
-插件会在代码文件保存后读取 VS Code 的诊断信息，并根据诊断结果上报：
+插件会在文件保存后判断当前文件是否是有效代码文件。如果该文件在当前插件统计周期内第一次被有效保存，则会上报：
 
-- `errorCount`：文件保存后存在阻塞性错误
-- `codePassed`：文件保存后没有阻塞性错误
+```json
+{
+  "activeFileIncrement": 1
+}
+```
 
-当前支持的代码文件后缀包括：
+同一个文件在同一个统计周期内重复保存，不会重复上报活跃文件数。
 
-- `.py`
-- `.c`
-- `.cpp`
-- `.js`
-- `.ts`
-- `.java`
-- `.go`
+有效代码文件需要满足：
 
-对于 Python 文件，插件除了识别 VS Code 的 Error 级别诊断外，也会把部分严重 Warning 视为阻塞性错误，例如未定义变量、语法错误、属性访问错误、导入错误等。
+- 是本地文件
+- 不是临时文件
+- 内容非空
+- 是支持的代码、样式、脚本、配置、Notebook 或文档型开发文件
+- 不在 `node_modules`、`.git`、`dist`、`build`、`out`、`coverage` 等目录中
+- 不是常见自动生成文件，例如 `.d.ts`、`.min.js`、`.generated.*`
+
+当前支持较常见的开发文件类型，包括：
+
+- 前端：`.js`、`.jsx`、`.ts`、`.tsx`、`.vue`、`.html`、`.css`、`.scss`、`.less`
+- 后端与通用语言：`.py`、`.java`、`.go`、`.rs`、`.c`、`.cpp`、`.h`、`.hpp`、`.cs`、`.php`、`.rb`
+- 脚本与终端：`.sh`、`.bat`、`.cmd`、`.ps1`
+- 数据与配置：`.json`、`.yaml`、`.yml`、`.toml`、`.env`、`.sql`
+- 文档型开发文件：`.md`
+- Notebook：`.ipynb`
+- 常见无后缀开发文件：`Dockerfile`、`Makefile`
+
+`.ipynb` 会通过 VS Code 的 Notebook 保存事件统计为活跃文件。Notebook 的修复行为统计仍依赖 VS Code diagnostics 是否能为对应内容产生文件级诊断。
+
+### 修复行为统计
+
+插件会在文件保存后延迟读取 VS Code diagnostics，判断文件是否存在严重问题。
+
+当同一个文件的状态从：
+
+```text
+存在严重问题
+```
+
+变为：
+
+```text
+无严重问题
+```
+
+时，会认为发生了一次修复行为，并上报：
+
+```json
+{
+  "fixCountIncrement": 1
+}
+```
+
+状态变化规则：
+
+| 上一次保存后状态 | 本次保存后状态 | 是否上报修复 |
+| --- | --- | --- |
+| 无严重问题 | 无严重问题 | 否 |
+| 无严重问题 | 有严重问题 | 否 |
+| 有严重问题 | 有严重问题 | 否 |
+| 有严重问题 | 无严重问题 | 是 |
+
+严重问题包括：
+
+- 所有 VS Code `Error` 级别 diagnostics
+- Python 中部分高价值 `Warning`，例如未定义变量、语法问题、导入失败、属性访问错误、明显类型错误等
+
+格式化、风格、行长度、约定类 warning 默认不作为严重问题。
 
 ### 编程时长统计
 
@@ -46,7 +101,7 @@ CodeSprout Valley Tracker 是一个 VS Code 扩展，用于收集用户在 VS Co
 - 切换到代码编辑器
 - 在当前编辑器中选中文本
 
-如果一段时间内没有新的活动，插件会认为当前编程活动暂停，并把已累计的时长上报给 Electron 应用。
+如果一段时间内没有新的活动，插件会认为当前编程活动暂停，并把已累计的时长通过 `codingDuration` 上报给 Electron 应用。
 
 ### 本地失败缓存
 
@@ -90,8 +145,8 @@ http://127.0.0.1:3001/activity-report
 ```json
 {
   "codeAdded": 10,
-  "errorCount": 1,
-  "codePassed": 2,
+  "activeFileIncrement": 1,
+  "fixCountIncrement": 1,
   "codingDuration": 300,
   "timestamp": 1778490000000
 }
@@ -102,8 +157,8 @@ http://127.0.0.1:3001/activity-report
 | 字段 | 含义 |
 | --- | --- |
 | `codeAdded` | 新增代码行数 |
-| `errorCount` | 保存后存在阻塞性错误的次数 |
-| `codePassed` | 保存后没有阻塞性错误的次数 |
+| `activeFileIncrement` | 活跃文件数增量 |
+| `fixCountIncrement` | 修复行为次数增量 |
 | `codingDuration` | 编程活跃时长增量，单位为秒 |
 | `timestamp` | 插件生成上报数据时的时间戳 |
 
@@ -156,21 +211,11 @@ CS Valley: Send Test Report
 ```json
 {
   "codeAdded": 10,
-  "errorCount": 1,
-  "codePassed": 2,
+  "activeFileIncrement": 1,
+  "fixCountIncrement": 1,
   "codingDuration": 300
 }
 ```
-
-## 构建 VSIX
-
-当前目录中已经包含一个示例打包文件：
-
-```text
-codetracker-0.0.1.vsix
-```
-
-如需重新打包，可以使用 VS Code Extension 相关工具重新生成 VSIX。
 
 ## 主要源码结构
 
@@ -194,7 +239,6 @@ src/
 | `src/extension.ts` | 插件入口，负责激活各个 tracker 和测试命令 |
 | `src/reportService.ts` | 上报服务，负责数据合并、发送、本地缓存和失败重试 |
 | `src/trackers/codeIncrementTracker.ts` | 统计保存时的代码新增行数 |
-| `src/trackers/errorReporterTracker.ts` | 统计保存后的错误或通过状态 |
+| `src/trackers/errorReporterTracker.ts` | 统计保存后的活跃文件数和修复行为次数 |
 | `src/trackers/codingDurationTracker.ts` | 统计用户编程活跃时长 |
 | `src/types.ts` | 活动数据类型定义 |
-

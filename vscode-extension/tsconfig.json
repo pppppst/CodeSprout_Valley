@@ -6,13 +6,6 @@
     "types": ["node", "mocha"],
     "outDir": "out",
     "rootDir": "src",
-    "strict": true,
-    "skipLibCheck": true
-  },
-  "exclude": [
-    "vitest.config.ts",
-    "vitest.setup.ts",
-    "src/__tests__/**",
-    "src/**/__tests__/**"
-  ]
+    "strict": true
+  }
 }

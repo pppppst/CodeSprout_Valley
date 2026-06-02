@@ -7,8 +7,8 @@ const RETRY_INTERVAL_MS = 30000;
 const PENDING_STORAGE_KEY = 'csvalley.pendingActivityReportData';
 const NUMERIC_KEYS: Array<keyof ActivityReportData> = [
     'codeAdded',
-    'errorCount',
-    'codePassed',
+    'activeFileIncrement',
+    'fixCountIncrement',
     'codingDuration'
 ];
 
@@ -63,6 +63,25 @@ export async function flushActivityBuffer(): Promise<void> {
     if (retryTimer) {
         clearTimeout(retryTimer);
         retryTimer = undefined;
+    }
+}
+
+export async function clearPendingActivityCache(): Promise<void> {
+    dataBuffer = {};
+    persistedPendingData = {};
+
+    if (batchTimer) {
+        clearTimeout(batchTimer);
+        batchTimer = undefined;
+    }
+
+    if (retryTimer) {
+        clearTimeout(retryTimer);
+        retryTimer = undefined;
+    }
+
+    if (extensionContext) {
+        await extensionContext.globalState.update(PENDING_STORAGE_KEY, undefined);
     }
 }
 

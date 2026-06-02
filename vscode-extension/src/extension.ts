@@ -1,5 +1,10 @@
 import * as vscode from 'vscode';
-import { flushActivityBuffer, initializeReportService, reportActivityToElectron } from './reportService';
+import {
+    clearPendingActivityCache,
+    flushActivityBuffer,
+    initializeReportService,
+    reportActivityToElectronImmediately
+} from './reportService';
 import {
     activateCodeIncrementTracker,
     deactivateCodeIncrementTracker
@@ -23,16 +28,19 @@ export function activate(context: vscode.ExtensionContext): void {
 
     const testReportCommand = vscode.commands.registerCommand('csvalley.sendTestReport', () => {
         vscode.window.showInformationMessage('CS Valley: Sending test activity report...');
-        reportActivityToElectron({
-            codeAdded: 10,
-            errorCount: 1,
-            codePassed: 2,
-            codingDuration: 300
+        reportActivityToElectronImmediately({
+            activeFileIncrement: 1
         });
         vscode.window.showInformationMessage('CS Valley: Test report queued.');
     });
 
+    const clearCacheCommand = vscode.commands.registerCommand('csvalley.clearPendingReportCache', async () => {
+        await clearPendingActivityCache();
+        vscode.window.showInformationMessage('CS Valley: Pending report cache cleared.');
+    });
+
     context.subscriptions.push(testReportCommand);
+    context.subscriptions.push(clearCacheCommand);
 }
 
 export async function deactivate(): Promise<void> {
