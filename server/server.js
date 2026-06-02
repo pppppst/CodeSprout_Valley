@@ -28,6 +28,25 @@ const SOLAR_TERMS_2026 = {
   '冬至': { start: '2026-12-21T00:00:00+08:00', end: '2027-01-05T00:00:00+08:00' }
 }
 
+// 🌟 新增：获取北京时间的 YYYY-MM-DD 字符串 (用于判断是否跨天)
+function getBeijingDateStr(timestamp) {
+  if (!timestamp) return '';
+  const d = new Date(timestamp + 8 * 3600000);
+  return d.toISOString().split('T')[0];
+}
+
+// 🌟 新增：根据时间戳获取对应的节气名称 (用于判断是否跨节气)
+function getSolarTermByTime(timestamp) {
+  for (const [term, schedule] of Object.entries(SOLAR_TERMS_2026)) {
+    const start = new Date(schedule.start).getTime();
+    const end = new Date(schedule.end).getTime();
+    if (timestamp >= start && timestamp < end) {
+      return term;
+    }
+  }
+  return null;
+}
+
 const express = require('express')
 const mongoose = require('mongoose')
 const cors = require('cors')
@@ -42,8 +61,6 @@ const app = express()
 const PORT = process.env.PORT || 3000
 const MONGO_URI = process.env.MONGO_URI
 const JWT_SECRET = process.env.JWT_SECRET
-const ADMIN_USERNAME = String(process.env.ADMIN_USERNAME || '').trim()
-const ADMIN_PASSWORD = String(process.env.ADMIN_PASSWORD || '')
 
 app.use(cors())
 app.use(express.json())
@@ -59,10 +76,7 @@ if (!JWT_SECRET) {
 }
 
 mongoose.connect(MONGO_URI, { serverSelectionTimeoutMS: 5000 })
-  .then(async () => {
-    console.log('MongoDB connected')
-    await ensureAdminAccount()
-  })
+  .then(() => console.log('MongoDB connected'))
   .catch((err) => {
     console.error('MongoDB connection failed:', err.message)
     process.exit(1)
@@ -70,78 +84,31 @@ mongoose.connect(MONGO_URI, { serverSelectionTimeoutMS: 5000 })
 
 function sanitizeUser(user) {
   const registrationDate = user.createdAt || user._id.getTimestamp()
-  const role = user.role === 'admin' ? 'admin' : 'user'
+  
+  const now = Date.now()
+  const todayStr = getBeijingDateStr(now)
+  const currentTerm = getSolarTermByTime(now)
 
-  return {
-    username: user.username,
-    role,
-    isAdmin: role === 'admin',
-    nickname: user.nickname || '',
-    birthday: user.birthday || '',
-    totalCodeLines: user.totalCodeLines || 0,
-    catFood: user.catFood || 0,
-    waterDrops: user.waterDrops || 0,
-    plantStage: user.plantStage || 1,
-    lastSyncTime: user.lastSyncTime,
-    registeredAt: registrationDate.toISOString(),
-    updatedAt: user.updatedAt
-  }
-}
-
-function sanitizeAdminUser(user) {
-  const registrationDate = user.createdAt || user._id.getTimestamp()
+  // 🌟 核心解耦：今日清今日的，节气清节气的！
+  const displayTodayLines = (user.lastCodeDate !== todayStr) ? 0 : (user.todayCodeLines || 0)
+  const displayTotalLines = (user.lastTermReset !== currentTerm) ? 0 : (user.totalCodeLines || 0)
+  
+  const displayCatFood = (user.lastTermReset !== currentTerm) ? 0 : (user.catFood || 0)
+  const displayWaterDrops = (user.lastTermReset !== currentTerm) ? 0 : (user.waterDrops || 0)
+  const displayPlantStage = (user.lastTermReset !== currentTerm) ? 1 : (user.plantStage || 1)
 
   return {
     username: user.username,
     nickname: user.nickname || '',
     birthday: user.birthday || '',
-    totalCodeLines: user.totalCodeLines || 0,
-    catFood: user.catFood || 0,
-    waterDrops: user.waterDrops || 0,
-    plantStage: user.plantStage || 1,
+    totalCodeLines: displayTotalLines, // 这个继续给你们的【节气周报】用
+    todayCodeLines: displayTodayLines, // 🌟 这个给前端的【实时主界面】用！
+    catFood: displayCatFood,
+    waterDrops: displayWaterDrops,
+    plantStage: displayPlantStage,
     lastSyncTime: user.lastSyncTime,
-    registeredAt: registrationDate.toISOString(),
-    updatedAt: user.updatedAt
+    registeredAt: registrationDate.toISOString() 
   }
-}
-
-async function ensureAdminAccount() {
-  if (!ADMIN_USERNAME || !ADMIN_PASSWORD) {
-    console.log('Admin account initialization skipped: ADMIN_USERNAME or ADMIN_PASSWORD is not set.')
-    return
-  }
-
-  if (ADMIN_USERNAME.length > 32 || ADMIN_PASSWORD.length < 6) {
-    console.warn('Admin account initialization skipped: username must be at most 32 chars and password at least 6 chars.')
-    return
-  }
-
-  const existingAdmin = await User.findOne({ username: ADMIN_USERNAME })
-  const salt = await bcrypt.genSalt(10)
-
-  if (!existingAdmin) {
-    const hashedPassword = await bcrypt.hash(ADMIN_PASSWORD, salt)
-    await User.create({
-      username: ADMIN_USERNAME,
-      password: hashedPassword,
-      role: 'admin',
-      totalCodeLines: 0,
-      catFood: 0,
-      waterDrops: 0,
-      plantStage: 1
-    })
-    console.log(`Admin account created: ${ADMIN_USERNAME}`)
-    return
-  }
-
-  const update = { role: 'admin' }
-  const passwordMatches = await bcrypt.compare(ADMIN_PASSWORD, existingAdmin.password)
-  if (!passwordMatches) {
-    update.password = await bcrypt.hash(ADMIN_PASSWORD, salt)
-  }
-
-  await User.updateOne({ _id: existingAdmin._id }, { $set: update })
-  console.log(`Admin account ready: ${ADMIN_USERNAME}`)
 }
 
 function authenticateToken(req, res, next) {
@@ -157,25 +124,6 @@ function authenticateToken(req, res, next) {
     next()
   } catch {
     return res.status(401).json({ success: false, message: 'Login expired, please log in again.' })
-  }
-}
-
-async function authenticateAdmin(req, res, next) {
-  try {
-    const user = await User.findById(req.auth.userId)
-    if (!user) {
-      return res.status(404).json({ success: false, message: 'User save not found.' })
-    }
-
-    if (user.role !== 'admin') {
-      return res.status(403).json({ success: false, message: 'Admin permission is required.' })
-    }
-
-    req.adminUser = user
-    next()
-  } catch (error) {
-    console.error('Admin auth failed:', error)
-    res.status(500).json({ success: false, message: 'Server error.' })
   }
 }
 
@@ -211,7 +159,6 @@ app.post('/api/register', async (req, res) => {
     const newUser = new User({
       username,
       password: hashedPassword,
-      role: 'user',
       totalCodeLines: 0,
       catFood: 0,
       waterDrops: 0,
@@ -246,7 +193,7 @@ app.post('/api/login', async (req, res) => {
     }
 
     const token = jwt.sign(
-      { userId: user._id.toString(), username: user.username, role: user.role === 'admin' ? 'admin' : 'user' },
+      { userId: user._id.toString(), username: user.username },
       JWT_SECRET,
       { expiresIn: '7d' }
     )
@@ -266,42 +213,57 @@ app.post('/api/login', async (req, res) => {
 
 app.post('/api/sync', authenticateToken, async (req, res) => {
   try {
-    const addedLines = Number(req.body.addedLines || 0)
-    const catFood = Number(req.body.catFood || 0)
-    const waterDrops = Number(req.body.waterDrops || 0)
-    const plantStage = Number(req.body.plantStage || 1)
+    const addedLines = Number(req.body.addedLines || 0);
+    let catFood = Number(req.body.catFood || 0);
+    let waterDrops = Number(req.body.waterDrops || 0);
+    let plantStage = Number(req.body.plantStage || 1);
 
     if (!Number.isFinite(addedLines) || addedLines < 0 || addedLines > 5000) {
-      return res.status(400).json({ success: false, message: 'Invalid addedLines value.' })
+      return res.status(400).json({ success: false, message: 'Invalid addedLines value.' });
     }
-
     if (![catFood, waterDrops, plantStage].every(Number.isFinite)) {
-      return res.status(400).json({ success: false, message: 'Invalid sync payload.' })
+      return res.status(400).json({ success: false, message: 'Invalid sync payload.' });
     }
 
-    const updatedUser = await User.findByIdAndUpdate(
-      req.auth.userId,
-      {
-        $inc: { totalCodeLines: addedLines },
-        $set: {
-          catFood: Math.max(0, catFood),
-          waterDrops: Math.max(0, waterDrops),
-          plantStage: Math.max(1, Math.min(4, plantStage)),
-          lastSyncTime: Date.now()
-        }
-      },
-      { new: true }
-    )
-
-    if (!updatedUser) {
-      return res.status(404).json({ success: false, message: 'User save not found.' })
+    const user = await User.findById(req.auth.userId);
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User save not found.' });
     }
 
-    console.log(`[sync] ${updatedUser.username}: +${addedLines} lines`)
-    res.json({ success: true, message: 'Cloud sync completed.', data: sanitizeUser(updatedUser) })
+    const now = Date.now();
+    const todayStr = getBeijingDateStr(now);
+    const currentTerm = getSolarTermByTime(now);
+
+    // 🌟 轨道 1：【每日清零逻辑】只针对 todayCodeLines
+    if (user.lastCodeDate !== todayStr) {
+      user.todayCodeLines = addedLines; // 跨天，今天从新增的行数重新算
+      user.lastCodeDate = todayStr;
+    } else {
+      user.todayCodeLines = (user.todayCodeLines || 0) + addedLines;
+    }
+
+    // 🌟 轨道 2：【节气清零逻辑】针对 totalCodeLines 和 猫粮等
+    if (user.lastTermReset !== currentTerm) {
+      user.totalCodeLines = addedLines; // 跨节气了，节气总数重新算
+      user.catFood = 0;
+      user.waterDrops = 0;
+      user.plantStage = 1;
+      user.lastTermReset = currentTerm;
+    } else {
+      user.totalCodeLines = (user.totalCodeLines || 0) + addedLines; // 没跨节气，总数疯狂累加！
+      user.catFood = Math.max(0, catFood);
+      user.waterDrops = Math.max(0, waterDrops);
+      user.plantStage = Math.max(1, Math.min(4, plantStage));
+    }
+
+    user.lastSyncTime = now;
+    await user.save();
+
+    console.log(`[sync] ${user.username}: lines=${user.totalCodeLines}, term=${currentTerm}`);
+    res.json({ success: true, message: 'Cloud sync completed.', data: sanitizeUser(user) });
   } catch (error) {
-    console.error('Sync failed:', error)
-    res.status(500).json({ success: false, message: 'Server error.' })
+    console.error('Sync failed:', error);
+    res.status(500).json({ success: false, message: 'Server error.' });
   }
 })
 
@@ -315,16 +277,6 @@ app.get('/api/user/me', authenticateToken, async (req, res) => {
     res.json({ success: true, data: sanitizeUser(user) })
   } catch (error) {
     console.error('Fetch user failed:', error)
-    res.status(500).json({ success: false, message: 'Server error.' })
-  }
-})
-
-app.get('/api/admin/users', authenticateToken, authenticateAdmin, async (req, res) => {
-  try {
-    const users = await User.find({}).sort({ createdAt: -1, username: 1 })
-    res.json({ success: true, data: users.map(sanitizeAdminUser) })
-  } catch (error) {
-    console.error('Fetch admin users failed:', error)
     res.status(500).json({ success: false, message: 'Server error.' })
   }
 })

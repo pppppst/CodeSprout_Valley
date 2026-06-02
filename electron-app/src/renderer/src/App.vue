@@ -40,7 +40,8 @@ function normalizePendingSync(value) {
     codeLines,
     commitCount: Math.max(0, Number(value?.commitCount || 0)),
     errorCount: Math.max(0, Number(value?.errorCount || 0)),
-    archiveCodeLines: Math.max(0, Number(value?.archiveCodeLines ?? codeLines))
+    archiveCodeLines: Math.max(0, Number(value?.archiveCodeLines ?? codeLines)),
+    leftoverLines: Math.max(0, Number(value?.leftoverLines || 0))
   }
 }
 
@@ -59,7 +60,7 @@ function loadPendingSyncFromStorage(username = loggedInUser.value) {
 
 function savePendingSyncToStorage() {
   const normalized = normalizePendingSync(pendingSync.value)
-  if (normalized.codeLines === 0 && normalized.commitCount === 0 && normalized.errorCount === 0 && normalized.archiveCodeLines === 0) {
+  if (normalized.codeLines === 0 && normalized.commitCount === 0 && normalized.errorCount === 0 && normalized.archiveCodeLines === 0 && normalized.leftoverLines === 0) {
     clearPendingSyncStorage()
     return
   }
@@ -209,23 +210,25 @@ function applyCloudSave(save) {
   if (typeof save.birthday === 'string') userBirthday.value = save.birthday
   if (save.role || save.isAdmin !== undefined) setUserRole(normalizeRoleFromData(save))
 
-  const totalCodeLines = Number(save.totalCodeLines || 0)
-  codeLines.value = totalCodeLines
-  syncedCodeLines.value = totalCodeLines
+  const displayTotalLines = Number(save.totalCodeLines || 0)
+  totalCodeLines.value = displayTotalLines
+
+  const displayTodayLines = Number(save.todayCodeLines || 0)
+  codeLines.value = displayTodayLines
+  syncedCodeLines.value = displayTodayLines
+  
   foodStock.value = Number(save.catFood || 0)
   waterStock.value = Number(save.waterDrops || 0)
 
-  // 读取云端的植物状态，覆盖前端默认值。
+  // 读取云端的植物状态，强制覆盖前端默认值（认后端为爹）。
   // 注意：因为 currentPlantStage 是一个根据浇水次数 (plantWaterByTerm) 计算得出的 computed 属性，
-  // 我们需要反向计算出对应的浇水次数并覆盖当前节气的状态
+  // 我们需要反向计算出对应的浇水次数并覆盖当前节气的状态。
+  // 注意不要使用 Math.max 避免跨节气清零失败被本地数值反盖。
   if (save.plantStage !== undefined && currentTermPinyin.value) {
     const requiredWaterings = getMinimumWateringsForPlantStage(save.plantStage)
     plantWaterByTerm.value = {
       ...plantWaterByTerm.value,
-      [currentTermPinyin.value]: Math.max(
-        plantWaterByTerm.value[currentTermPinyin.value] || 0,
-        requiredWaterings
-      )
+      [currentTermPinyin.value]: requiredWaterings
     }
   }
 
@@ -301,32 +304,20 @@ async function handleCloudSync() {
     return
   }
 
-  const linesToSync = Math.max(0, codeLines.value - syncedCodeLines.value)
-  const payload = {
-    addedLines: linesToSync,
-    catFood: foodStock.value,
-    waterDrops: waterStock.value,
-    plantStage: currentPlantStage.value
-  }
-
   isCloudBusy.value = true
-  authStatusMessage.value = '正在同步云端存档...'
+  authStatusMessage.value = '正在手动同步云端存档...'
   try {
-    const result = await syncCloudSave(cloudToken.value, payload)
-    applyCloudSave(result.data)
-    authStatusMessage.value = `同步完成，本次新增 ${linesToSync} 行代码`
+    await processAutoSync()
+    authStatusMessage.value = '手动同步完成'
   } catch (error) {
-    if (error.status === 401) {
-      clearAuthSession()
-    }
-    authStatusMessage.value = `同步失败：${error.message}`
+    authStatusMessage.value = `同步失败：${error?.message || '未知错误'}`
   } finally {
     isCloudBusy.value = false
   }
 }
 
 // ==========================================
-// 🌟 新增：后台自动静默同步逻辑 (Bug已修复版)
+// 🌟 后台自动静默同步逻辑（结算与同步彻底分离版）
 // ==========================================
 async function processAutoSync() {
   // 未登录时不自动上传云端，但本地数据仍正常累计
@@ -334,22 +325,67 @@ async function processAutoSync() {
   if (autoSyncInFlight) return
 
   const hasPendingStats = pendingSync.value.codeLines > 0 || pendingSync.value.commitCount > 0 || pendingSync.value.errorCount > 0
-  const archiveCodeLines = Math.max(0, Number(pendingSync.value.archiveCodeLines || 0))
-  
+  const localUnsyncedLines = Math.max(0, Number(pendingSync.value.archiveCodeLines || 0))
+  const leftoverLines = Math.max(0, Number(pendingSync.value.leftoverLines || 0))
+
+  let newLeftoverLines = leftoverLines
+
+  // ────────────────────────────────────────
+  // 🌟 第一步：【结算奖励】只有真的敲了新代码时，才去计算新增的猫粮和水滴！
+  // ────────────────────────────────────────
+  if (localUnsyncedLines > 0) {
+    let totalLinesToConvert = localUnsyncedLines + leftoverLines
+
+    // 规则：每 CODE_LINES_PER_REWARD 行代码 = RESOURCE_PER_REWARD 猫粮和 RESOURCE_PER_REWARD 水滴
+    let earnedThresholds = Math.floor(totalLinesToConvert / CODE_LINES_PER_REWARD)
+    let earnedCatFood = earnedThresholds * RESOURCE_PER_REWARD
+    let earnedWaterDrops = earnedThresholds * RESOURCE_PER_REWARD
+
+    // 没兑换完的”零头”代码存起来，下次继续用（余数池）
+    newLeftoverLines = totalLinesToConvert % CODE_LINES_PER_REWARD
+
+    // 把赚到的奖励加到当前余额里
+    foodStock.value += earnedCatFood
+    waterStock.value += earnedWaterDrops
+  }
+
+  // ────────────────────────────────────────
+  // 🌟 第二步：【雷打不动的云端同步】无论有没有敲代码，永远执行！
+  // 为什么？因为：
+  //   1. 你可能刚才点击了”喂猫”/”浇水”，余额变了，必须告诉后端！
+  //   2. 需要后端每30秒告诉你一次：今天是不是新的一天？节气是不是变了？
+  //   3. 后端会执行跨天 reset（代码行清零）和跨节气 reset（猫粮/水滴清零）
+  // ────────────────────────────────────────
   autoSyncInFlight = true
   try {
-    // 1. 🌟 修复：无条件同步总资产！这样你的喂猫、浇水等物资变化都会每 30 秒上云，并且刷新界面的同步时间。
+    // 发送最新的余额给后端（哪怕没敲代码 addedLines=0）
     const archivePayload = {
-      addedLines: archiveCodeLines,
+      addedLines: localUnsyncedLines,
       catFood: foodStock.value,
       waterDrops: waterStock.value,
       plantStage: currentPlantStage.value
     }
     const syncResult = await syncCloudSave(cloudToken.value, archivePayload)
-    applyCloudSave(syncResult.data) // 这行会让界面的“最近同步时间”刷新！
-    pendingSync.value.archiveCodeLines = 0
 
-    // 2. 再上传当天的节气增量统计数据（只有有数据时才上传这部分）
+    // 🌟 认后端为爹：接收后端的审判结果
+    // 后端返回的 data 已经是经过跨天/跨节气处理后的最终值
+    applyCloudSave(syncResult.data)
+
+    // 🌟 结算成功后，清空”本次新增”，存好”代码零头”
+    pendingSync.value.archiveCodeLines = 0
+    pendingSync.value.leftoverLines = newLeftoverLines
+
+    // 🌟 检测并响应后端的跨天/跨节气事件
+    if (syncResult._meta) {
+      if (syncResult._meta.dailyReset) {
+        console.log('[CS Valley] 🌅 后端通知：新的一天，代码计数已重置！')
+      }
+      if (syncResult._meta.termReset) {
+        console.log(`[CS Valley] 🌿 后端通知：进入新节气「${syncResult._meta.currentTerm}」，猫粮/水滴已重置！`)
+      }
+    }
+
+    // 再上传当天的节气增量统计数据（有数据才上传，避免空请求）
     if (hasPendingStats) {
       const statsPayload = {
         date: getTodayString(),
@@ -358,7 +394,7 @@ async function processAutoSync() {
         commitCount: pendingSync.value.commitCount,
         errorCount: pendingSync.value.errorCount
       }
-      
+
       await uploadTermDailyStat(cloudToken.value, statsPayload)
 
       // 🌟 核心防丢机制：只有云端返回成功，才清空本地缓冲池
@@ -435,6 +471,7 @@ function updateUiScale() {
 // ==========================================
 const codeLines = ref(150)
 const syncedCodeLines = ref(0)
+const totalCodeLines = ref(0)
 const catExp = ref(0)
 const message = ref('🐱 睡觉中...')
 const isBubbleShaking = ref(false)
@@ -842,31 +879,6 @@ function applyActivityUpdate(data) {
 // 经验条计算
 const activeGridCount = computed(() => {
   return Math.min(Math.floor(codeLines.value / CODE_LINES_PER_REWARD), 5)
-})
-
-const rewardedCodeThreshold = computed(() => {
-  return Math.max(0, Math.floor(codeLines.value / CODE_LINES_PER_REWARD))
-})
-
-const highestRewardedThreshold = ref(rewardedCodeThreshold.value)
-
-watch(rewardedCodeThreshold, (newValue) => {
-  if (suppressResourceRewards.value) return
-
-  if (newValue > highestRewardedThreshold.value) {
-    const oldValue = highestRewardedThreshold.value
-    const gainedThresholds = newValue - oldValue
-    const bonus = gainedThresholds * RESOURCE_PER_REWARD
-    const maxWaterThreshold = Math.floor(MAX_WATER_REWARDED_LINES / CODE_LINES_PER_REWARD)
-    const gainedWaterThresholds = Math.max(
-      0,
-      Math.min(newValue, maxWaterThreshold) - Math.min(oldValue, maxWaterThreshold)
-    )
-
-    foodStock.value += bonus
-    waterStock.value += gainedWaterThresholds * RESOURCE_PER_REWARD
-    highestRewardedThreshold.value = newValue
-  }
 })
 
 // ==========================================
@@ -1919,7 +1931,7 @@ function simulateTermSettlement() {
     title: `${settledTermName}结算周报`,
     date: `${settledDate.getFullYear()}年${pad2(settledDate.getMonth() + 1)}月${pad2(settledDate.getDate())}日`,
     owner: loggedInUser.value || '本地用户',
-    totalCodeLines: codeLines.value,
+    totalCodeLines: totalCodeLines.value,
     todayPassed: todayPassed.value,
     todayErrors: todayErrors.value,
     passRate: todayPassed.value + todayErrors.value === 0
@@ -2011,8 +2023,10 @@ onMounted(() => {
   }, 60000)
 
   // 🌟 挂载 30 秒自动同步定时器
-  autoSyncTimer = setInterval(processAutoSync, AUTO_SYNC_INTERVAL_MS)
+  // 🌟 1. 首屏瞬间突击：一进来立刻执行一次空跑同步
   processAutoSync()
+  // 🌟 2. 正常挂载轮询：然后才开启 30 秒一次的自动保存
+  autoSyncTimer = setInterval(processAutoSync, AUTO_SYNC_INTERVAL_MS)
 })
 
 onUnmounted(() => {
@@ -2195,7 +2209,7 @@ onUnmounted(() => {
               <span>{{ user.nickname || '未设置昵称' }}</span>
             </div>
             <div class="admin-user-grid">
-              <div><span>代码行数</span><strong>{{ user.totalCodeLines || 0 }}</strong></div>
+              <div><span>今日代码</span><strong>{{ user.todayCodeLines || 0 }}</strong></div>
               <div><span>猫粮</span><strong>{{ user.catFood || 0 }}</strong></div>
               <div><span>水滴</span><strong>{{ user.waterDrops || 0 }}</strong></div>
               <div><span>植物阶段</span><strong>{{ user.plantStage || 1 }}</strong></div>
@@ -2228,7 +2242,7 @@ onUnmounted(() => {
         </div>
         <div class="stats-content">
           <div class="stat-item">
-            <span>代码行数: {{ codeLines }}</span>
+            <span>今日代码: {{ codeLines }}</span>
             <div class="progress-bar">
               <div v-for="i in 5" :key="i" class="grid" :class="{ active: i <= activeGridCount }"></div>
             </div>
