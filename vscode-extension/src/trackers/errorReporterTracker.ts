@@ -1,136 +1,260 @@
 import * as vscode from 'vscode';
 import { reportActivityToElectronImmediately } from '../reportService';
 
-const REPORT_THROTTLE_MS = 3000;
-const DIAGNOSTIC_SETTLE_MS = 800;
-const CODE_EXTENSIONS = ['.py', '.c', '.cpp', '.js', '.ts', '.java', '.go'];
+const DIAGNOSTIC_SETTLE_MS = 1000;
+const CODE_EXTENSIONS = [
+    '.bat',
+    '.c',
+    '.cmd',
+    '.cpp',
+    '.cs',
+    '.css',
+    '.env',
+    '.go',
+    '.h',
+    '.hpp',
+    '.html',
+    '.java',
+    '.js',
+    '.json',
+    '.jsx',
+    '.less',
+    '.md',
+    '.php',
+    '.ps1',
+    '.py',
+    '.rb',
+    '.rs',
+    '.scss',
+    '.sh',
+    '.sql',
+    '.toml',
+    '.ts',
+    '.tsx',
+    '.vue',
+    '.yaml',
+    '.yml'
+];
+const CODE_FILENAMES = new Set([
+    'dockerfile',
+    'makefile',
+    '.eslintrc',
+    '.prettierrc'
+]);
+const EXCLUDED_DIRECTORIES = new Set([
+    'node_modules',
+    '.git',
+    '.next',
+    '.venv',
+    'dist',
+    'build',
+    'out',
+    'coverage'
+]);
 
-let pendingErrorCount = 0;
-let pendingPassCount = 0;
-let reportTimeout: NodeJS.Timeout | undefined;
+const activeFiles = new Set<string>();
+const fileProblemState = new Map<string, boolean>();
+const saveTimers = new Map<string, NodeJS.Timeout>();
 
-function isTrackableCodeDocument(document: vscode.TextDocument): boolean {
-    if (document.uri.scheme !== 'file' || document.isUntitled) {
+function isValidCodeFile(document: vscode.TextDocument): boolean {
+    if (!isValidFileUri(document.uri) || document.isUntitled) {
         return false;
     }
 
-    const path = document.uri.fsPath.toLowerCase();
-    return CODE_EXTENSIONS.some(ext => path.endsWith(ext));
+    if (document.getText().trim().length === 0) {
+        return false;
+    }
+
+    if (!isSupportedCodePath(document.uri.fsPath)) {
+        return false;
+    }
+
+    return true;
 }
 
-function hasBlockingDiagnostic(uri: vscode.Uri): boolean {
-    const diagnostics = vscode.languages.getDiagnostics(uri);
-    const isPythonFile = uri.fsPath.toLowerCase().endsWith('.py');
+function isValidNotebook(document: vscode.NotebookDocument): boolean {
+    if (!isValidFileUri(document.uri)) {
+        return false;
+    }
 
-    return diagnostics.some(diagnostic => {
-        if (diagnostic.severity === vscode.DiagnosticSeverity.Error) {
-            return true;
-        }
+    if (!document.uri.fsPath.toLowerCase().endsWith('.ipynb')) {
+        return false;
+    }
 
-        if (!isPythonFile || diagnostic.severity !== vscode.DiagnosticSeverity.Warning) {
-            return false;
-        }
+    if (!isSupportedCodePath(document.uri.fsPath)) {
+        return false;
+    }
 
-        const diagnosticCode = typeof diagnostic.code === 'object'
-            ? diagnostic.code.value
-            : diagnostic.code;
-        const fatalPythonCodes = new Set([
-            'reportUndefinedVariable',
-            'reportInvalidSyntax',
-            'reportOptionalMemberAccess',
-            'reportAttributeAccessIssue'
-        ]);
+    return document.getCells().some(cell => cell.document.getText().trim().length > 0);
+}
 
-        if (fatalPythonCodes.has(String(diagnosticCode))) {
-            return true;
-        }
+function isValidFileUri(uri: vscode.Uri): boolean {
+    return uri.scheme === 'file';
+}
 
-        return /(not defined|undefined|syntax|no attribute|cannot import|import error|unexpected indent)/i.test(
-            diagnostic.message
-        );
+function isSupportedCodePath(fsPath: string): boolean {
+    const normalizedPath = fsPath.toLowerCase().replace(/\\/g, '/');
+    const pathParts = normalizedPath.split('/');
+    const fileName = pathParts[pathParts.length - 1];
+
+    if (pathParts.some(part => EXCLUDED_DIRECTORIES.has(part))) {
+        return false;
+    }
+
+    if (isGeneratedFile(normalizedPath)) {
+        return false;
+    }
+
+    return CODE_EXTENSIONS.some(ext => normalizedPath.endsWith(ext)) || CODE_FILENAMES.has(fileName);
+}
+
+function isGeneratedFile(normalizedPath: string): boolean {
+    return normalizedPath.endsWith('.d.ts') ||
+        normalizedPath.includes('.generated.') ||
+        normalizedPath.includes('.gen.') ||
+        normalizedPath.includes('.min.') ||
+        normalizedPath.includes('/generated/') ||
+        normalizedPath.includes('/__generated__/');
+}
+
+function hasSevereProblem(document: vscode.TextDocument): boolean {
+    const diagnostics = vscode.languages.getDiagnostics(document.uri);
+    return diagnostics.some(diagnostic => isSevereDiagnostic(diagnostic, document));
+}
+
+function isSevereDiagnostic(diagnostic: vscode.Diagnostic, document: vscode.TextDocument): boolean {
+    if (diagnostic.severity === vscode.DiagnosticSeverity.Error) {
+        return true;
+    }
+
+    if (diagnostic.severity !== vscode.DiagnosticSeverity.Warning) {
+        return false;
+    }
+
+    if (!document.uri.fsPath.toLowerCase().endsWith('.py')) {
+        return false;
+    }
+
+    const diagnosticCode = typeof diagnostic.code === 'object'
+        ? diagnostic.code.value
+        : diagnostic.code;
+    const severePythonCodes = new Set([
+        'reportUndefinedVariable',
+        'reportInvalidSyntax',
+        'reportOptionalMemberAccess',
+        'reportAttributeAccessIssue',
+        'reportMissingImports',
+        'reportMissingModuleSource',
+        'reportGeneralTypeIssues',
+        'reportCallIssue',
+        'reportArgumentType'
+    ]);
+
+    if (severePythonCodes.has(String(diagnosticCode))) {
+        return true;
+    }
+
+    return /(not defined|undefined|unresolved import|missing import|syntax|type|no attribute|cannot import|import error|unexpected indent)/i.test(
+        diagnostic.message
+    );
+}
+
+function scheduleSavedDocumentProcessing(document: vscode.TextDocument): void {
+    const fileKey = document.uri.fsPath;
+    const oldTimer = saveTimers.get(fileKey);
+
+    if (oldTimer) {
+        clearTimeout(oldTimer);
+    }
+
+    const timer = setTimeout(() => {
+        saveTimers.delete(fileKey);
+        handleSavedDocument(document);
+    }, DIAGNOSTIC_SETTLE_MS);
+
+    saveTimers.set(fileKey, timer);
+}
+
+function handleSavedNotebook(document: vscode.NotebookDocument): void {
+    if (!isValidNotebook(document)) {
+        return;
+    }
+
+    const fileKey = document.uri.fsPath;
+    if (activeFiles.has(fileKey)) {
+        return;
+    }
+
+    activeFiles.add(fileKey);
+    reportActivityToElectronImmediately({
+        activeFileIncrement: 1,
+        fixCountIncrement: 0
     });
+    console.log('[CS Valley] Active notebook increment: 1.');
 }
 
-function getDebugTargetDocument(): vscode.TextDocument | undefined {
-    const activeDocument = vscode.window.activeTextEditor?.document;
-
-    if (activeDocument && isTrackableCodeDocument(activeDocument)) {
-        return activeDocument;
-    }
-
-    const visibleDocument = vscode.window.visibleTextEditors
-        .map(editor => editor.document)
-        .find(isTrackableCodeDocument);
-
-    if (visibleDocument) {
-        return visibleDocument;
-    }
-
-    return vscode.workspace.textDocuments.find(isTrackableCodeDocument);
-}
-
-function scheduleDiagnosticReport(): void {
-    if (reportTimeout) {
-        clearTimeout(reportTimeout);
-    }
-
-    reportTimeout = setTimeout(() => {
-        flushDiagnosticReport();
-    }, REPORT_THROTTLE_MS);
-}
-
-function flushDiagnosticReport(): void {
-    if (reportTimeout) {
-        clearTimeout(reportTimeout);
-        reportTimeout = undefined;
-    }
-
-    if (pendingErrorCount > 0) {
-        reportActivityToElectronImmediately({ errorCount: pendingErrorCount });
-        console.log(`[CS Valley] Error increment: ${pendingErrorCount}.`);
-        pendingErrorCount = 0;
-    }
-
-    if (pendingPassCount > 0) {
-        reportActivityToElectronImmediately({ codePassed: pendingPassCount });
-        console.log(`[CS Valley] Pass increment: ${pendingPassCount}.`);
-        pendingPassCount = 0;
-    }
-}
-
-async function onDebugSessionStarted(session: vscode.DebugSession): Promise<void> {
-    if (session.parentSession) {
+function handleSavedDocument(document: vscode.TextDocument): void {
+    if (!isValidCodeFile(document)) {
         return;
     }
 
-    const document = getDebugTargetDocument();
+    const fileKey = document.uri.fsPath;
+    const activeFileIncrement = activeFiles.has(fileKey) ? 0 : 1;
+    const previousHasProblem = fileProblemState.get(fileKey) ?? false;
+    const currentHasProblem = hasSevereProblem(document);
+    const fixCountIncrement = previousHasProblem && !currentHasProblem ? 1 : 0;
 
-    if (!document) {
+    if (activeFileIncrement > 0) {
+        activeFiles.add(fileKey);
+    }
+
+    fileProblemState.set(fileKey, currentHasProblem);
+
+    if (activeFileIncrement <= 0 && fixCountIncrement <= 0) {
         return;
     }
 
-    await new Promise(resolve => setTimeout(resolve, DIAGNOSTIC_SETTLE_MS));
+    reportActivityToElectronImmediately({
+        activeFileIncrement,
+        fixCountIncrement
+    });
 
-    if (hasBlockingDiagnostic(document.uri)) {
-        pendingErrorCount += 1;
-    } else {
-        pendingPassCount += 1;
+    if (activeFileIncrement > 0) {
+        console.log(`[CS Valley] Active file increment: ${activeFileIncrement}.`);
     }
 
-    scheduleDiagnosticReport();
+    if (fixCountIncrement > 0) {
+        console.log(`[CS Valley] Fix count increment: ${fixCountIncrement}.`);
+    }
 }
 
 export function activateErrorReporterTracker(context: vscode.ExtensionContext): void {
-    pendingErrorCount = 0;
-    pendingPassCount = 0;
+    activeFiles.clear();
+    fileProblemState.clear();
+    clearSaveTimers();
 
     context.subscriptions.push(
-        vscode.debug.onDidStartDebugSession(session => {
-            void onDebugSessionStarted(session);
+        vscode.workspace.onDidSaveTextDocument(document => {
+            scheduleSavedDocumentProcessing(document);
+        })
+    );
+
+    context.subscriptions.push(
+        vscode.workspace.onDidSaveNotebookDocument(document => {
+            handleSavedNotebook(document);
         })
     );
 }
 
 export function deactivateErrorReporterTracker(): void {
-    flushDiagnosticReport();
+    clearSaveTimers();
+    activeFiles.clear();
+    fileProblemState.clear();
+}
+
+function clearSaveTimers(): void {
+    saveTimers.forEach(timer => {
+        clearTimeout(timer);
+    });
+    saveTimers.clear();
 }

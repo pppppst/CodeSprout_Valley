@@ -2,7 +2,7 @@
   "name": "codetracker",
   "displayName": "Codetracker",
   "description": "A VSCode extension to track and record your coding activity",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "engines": {
     "vscode": "^1.80.0"
   },
@@ -24,6 +24,10 @@
       {
         "command": "csvalley.sendTestReport",
         "title": "CS Valley: Send Test Report"
+      },
+      {
+        "command": "csvalley.clearPendingReportCache",
+        "title": "CS Valley: Clear Pending Report Cache"
       }
     ],
     "configuration": {

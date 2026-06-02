@@ -282,7 +282,9 @@ app.whenReady().then(() => {
   })
 
   ipcMain.handle('activity:get-latest', () => {
-    return latestPluginActivity
+    return {
+      timestamp: latestPluginActivity.timestamp
+    }
   })
 
   app.on('activate', function () {

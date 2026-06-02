@@ -1,6 +1,56 @@
 import * as vscode from 'vscode';
 import { reportActivityToElectronImmediately } from '../reportService';
 
+const CODE_EXTENSIONS = [
+    '.bat',
+    '.c',
+    '.cmd',
+    '.cpp',
+    '.cs',
+    '.css',
+    '.env',
+    '.go',
+    '.h',
+    '.hpp',
+    '.html',
+    '.java',
+    '.js',
+    '.json',
+    '.jsx',
+    '.less',
+    '.md',
+    '.php',
+    '.ps1',
+    '.py',
+    '.rb',
+    '.rs',
+    '.scss',
+    '.sh',
+    '.sql',
+    '.toml',
+    '.ts',
+    '.tsx',
+    '.vue',
+    '.yaml',
+    '.yml'
+];
+const CODE_FILENAMES = new Set([
+    'dockerfile',
+    'makefile',
+    '.eslintrc',
+    '.prettierrc'
+]);
+const EXCLUDED_DIRECTORIES = new Set([
+    'node_modules',
+    '.git',
+    '.next',
+    '.venv',
+    'dist',
+    'build',
+    'out',
+    'coverage'
+]);
+
 const lastKnownLineCount = new Map<string, number>();
 
 let accumulatedCodeAddedIncrement = 0;
@@ -12,11 +62,38 @@ function getReportThrottleMs(): number {
 }
 
 function isTrackableDocument(document: vscode.TextDocument): boolean {
-    return document.uri.scheme === 'file' && !document.isUntitled;
+    return document.uri.scheme === 'file' &&
+        !document.isUntitled &&
+        isSupportedCodePath(document.uri.fsPath);
 }
 
 function getDocumentKey(uri: vscode.Uri): string {
     return uri.toString();
+}
+
+function isSupportedCodePath(fsPath: string): boolean {
+    const normalizedPath = fsPath.toLowerCase().replace(/\\/g, '/');
+    const pathParts = normalizedPath.split('/');
+    const fileName = pathParts[pathParts.length - 1];
+
+    if (pathParts.some(part => EXCLUDED_DIRECTORIES.has(part))) {
+        return false;
+    }
+
+    if (isGeneratedFile(normalizedPath)) {
+        return false;
+    }
+
+    return CODE_EXTENSIONS.some(ext => normalizedPath.endsWith(ext)) || CODE_FILENAMES.has(fileName);
+}
+
+function isGeneratedFile(normalizedPath: string): boolean {
+    return normalizedPath.endsWith('.d.ts') ||
+        normalizedPath.includes('.generated.') ||
+        normalizedPath.includes('.gen.') ||
+        normalizedPath.includes('.min.') ||
+        normalizedPath.includes('/generated/') ||
+        normalizedPath.includes('/__generated__/');
 }
 
 type CommentSyntax = {
@@ -174,6 +251,9 @@ function calculateAndAccumulateCodeIncrement(document: vscode.TextDocument): voi
     const diff = currentLines - lastLines;
     if (diff > 0) {
         accumulatedCodeAddedIncrement += diff;
+        console.log(
+            `[CS Valley] Code increment detected: ${diff} lines. file=${document.uri.fsPath}, previous=${lastLines}, current=${currentLines}.`
+        );
         scheduleCodeIncrementReport();
     }
 
