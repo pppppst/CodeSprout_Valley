@@ -6,6 +6,8 @@ const termReportSchema = new mongoose.Schema({
   periodStart: { type: String, required: true },
   periodEnd: { type: String, required: true },
   totalCodeLines: { type: Number, default: 0 },
+  totalActiveFileCount: { type: Number, default: 0 },
+  totalFixCount: { type: Number, default: 0 },
   totalCommitCount: { type: Number, default: 0 },
   totalErrorCount: { type: Number, default: 0 },
   plantStage: { type: Number, default: 1 },

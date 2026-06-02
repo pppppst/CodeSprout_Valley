@@ -61,6 +61,8 @@ const app = express()
 const PORT = process.env.PORT || 3000
 const MONGO_URI = process.env.MONGO_URI
 const JWT_SECRET = process.env.JWT_SECRET
+const ADMIN_USERNAME = String(process.env.ADMIN_USERNAME || '').trim()
+const ADMIN_PASSWORD = String(process.env.ADMIN_PASSWORD || '')
 
 app.use(cors())
 app.use(express.json())
@@ -76,11 +78,63 @@ if (!JWT_SECRET) {
 }
 
 mongoose.connect(MONGO_URI, { serverSelectionTimeoutMS: 5000 })
-  .then(() => console.log('MongoDB connected'))
+  .then(async () => {
+    console.log('MongoDB connected')
+    await ensureAdminAccount()
+    await migrateOldUsers()
+  })
   .catch((err) => {
     console.error('MongoDB connection failed:', err.message)
     process.exit(1)
   })
+
+async function ensureAdminAccount() {
+  if (!ADMIN_USERNAME || !ADMIN_PASSWORD) {
+    console.warn('Admin account is not configured. Set ADMIN_USERNAME and ADMIN_PASSWORD to enable admin login.')
+    return
+  }
+
+  if (ADMIN_PASSWORD.length < 6) {
+    console.warn('Admin account is not configured. ADMIN_PASSWORD must be at least 6 chars.')
+    return
+  }
+
+  const existingAdmin = await User.findOne({ username: ADMIN_USERNAME })
+  const salt = await bcrypt.genSalt(10)
+
+  if (!existingAdmin) {
+    const hashedPassword = await bcrypt.hash(ADMIN_PASSWORD, salt)
+    await User.create({
+      username: ADMIN_USERNAME,
+      password: hashedPassword,
+      role: 'admin',
+      totalCodeLines: 0,
+      catFood: 0,
+      waterDrops: 0,
+      plantStage: 1
+    })
+    console.log(`Admin account ready: ${ADMIN_USERNAME}`)
+    return
+  }
+
+  let shouldSave = false
+  if (existingAdmin.role !== 'admin') {
+    existingAdmin.role = 'admin'
+    shouldSave = true
+  }
+
+  const passwordMatches = await bcrypt.compare(ADMIN_PASSWORD, existingAdmin.password)
+  if (!passwordMatches) {
+    existingAdmin.password = await bcrypt.hash(ADMIN_PASSWORD, salt)
+    shouldSave = true
+  }
+
+  if (shouldSave) {
+    await existingAdmin.save()
+  }
+
+  console.log(`Admin account ready: ${ADMIN_USERNAME}`)
+}
 
 function sanitizeUser(user) {
   const registrationDate = user.createdAt || user._id.getTimestamp()
@@ -99,6 +153,8 @@ function sanitizeUser(user) {
 
   return {
     username: user.username,
+    role: user.role || 'user',
+    isAdmin: user.role === 'admin',
     nickname: user.nickname || '',
     birthday: user.birthday || '',
     totalCodeLines: displayTotalLines, // 这个继续给你们的【节气周报】用
@@ -127,8 +183,35 @@ function authenticateToken(req, res, next) {
   }
 }
 
+async function authenticateAdmin(req, res, next) {
+  authenticateToken(req, res, async () => {
+    try {
+      const user = await User.findById(req.auth.userId)
+      if (!user) {
+        return res.status(404).json({ success: false, message: 'User save not found.' })
+      }
+
+      if (user.role !== 'admin') {
+        return res.status(403).json({ success: false, message: 'Admin permission required.' })
+      }
+
+      req.adminUser = user
+      next()
+    } catch (error) {
+      console.error('Admin auth failed:', error)
+      res.status(500).json({ success: false, message: 'Server error.' })
+    }
+  })
+}
+
 function isNonNegativeFiniteNumber(value) {
   return Number.isFinite(value) && value >= 0
+}
+
+function readNonNegativeMetric(primaryValue, legacyValue) {
+  const rawValue = primaryValue !== undefined ? primaryValue : legacyValue
+  const value = Number(rawValue || 0)
+  return Number.isFinite(value) ? value : NaN
 }
 
 app.get('/', (req, res) => {
@@ -193,7 +276,7 @@ app.post('/api/login', async (req, res) => {
     }
 
     const token = jwt.sign(
-      { userId: user._id.toString(), username: user.username },
+      { userId: user._id.toString(), username: user.username, role: user.role || 'user' },
       JWT_SECRET,
       { expiresIn: '7d' }
     )
@@ -320,20 +403,49 @@ app.get('/api/user/:username', authenticateToken, async (req, res) => {
   res.json({ success: true, data: sanitizeUser(user) })
 })
 
+app.get('/api/admin/users', authenticateAdmin, async (req, res) => {
+  try {
+    const users = await User.find({})
+      .select('username role nickname birthday totalCodeLines todayCodeLines catFood waterDrops plantStage lastSyncTime createdAt updatedAt')
+      .sort({ createdAt: -1 })
+
+    const data = users.map((user) => ({
+      username: user.username,
+      role: user.role || 'user',
+      isAdmin: user.role === 'admin',
+      nickname: user.nickname || '',
+      birthday: user.birthday || '',
+      totalCodeLines: user.totalCodeLines || 0,
+      todayCodeLines: user.todayCodeLines || 0,
+      catFood: user.catFood || 0,
+      waterDrops: user.waterDrops || 0,
+      plantStage: user.plantStage || 1,
+      lastSyncTime: user.lastSyncTime,
+      registeredAt: (user.createdAt || user._id.getTimestamp()).toISOString(),
+      updatedAt: user.updatedAt
+    }))
+
+    res.json({ success: true, data })
+  } catch (error) {
+    console.error('Fetch admin users failed:', error)
+    res.status(500).json({ success: false, message: 'Server error.' })
+  }
+})
+
 app.post('/api/term-stats', authenticateToken, async (req, res) => {
   try {
     const date = String(req.body.date || '').trim()
     const solarTerm = String(req.body.solarTerm || '').trim()
     const codeLines = Number(req.body.codeLines || 0)
-    const commitCount = Number(req.body.commitCount || 0)
-    const errorCount = Number(req.body.errorCount || 0)
+    const activeFileCount = readNonNegativeMetric(req.body.activeFileCount, req.body.commitCount)
+    const fixCount = readNonNegativeMetric(req.body.fixCount, req.body.errorCount)
     const userId = req.auth.userId
 
     if (!date || !solarTerm) {
       return res.status(400).json({ success: false, message: 'date and solarTerm are required.' })
     }
 
-    if (![codeLines, commitCount, errorCount].every(isNonNegativeFiniteNumber)) {
+    if (![codeLines, activeFileCount, fixCount].every(isNonNegativeFiniteNumber)) {
       return res.status(400).json({ success: false, message: 'Term stats values must be non-negative numbers.' })
     }
 
@@ -348,8 +460,10 @@ app.post('/api/term-stats', authenticateToken, async (req, res) => {
       {
         $inc: {
           codeLines,
-          commitCount,
-          errorCount
+          activeFileCount,
+          fixCount,
+          commitCount: activeFileCount,
+          errorCount: fixCount
         }
       },
       { upsert: true, new: true, setDefaultsOnInsert: true }
@@ -374,12 +488,16 @@ app.get('/api/term-stats', authenticateToken, async (req, res) => {
     const stats = await TermDailyStat.find({ userId, solarTerm }).sort({ date: 1 })
 
     let totalCodeLines = 0
+    let totalActiveFileCount = 0
+    let totalFixCount = 0
     let totalCommitCount = 0
     let totalErrorCount = 0
     stats.forEach((stat) => {
       totalCodeLines += stat.codeLines || 0
-      totalCommitCount += stat.commitCount || 0
-      totalErrorCount += stat.errorCount || 0
+      totalActiveFileCount += stat.activeFileCount ?? stat.commitCount ?? 0
+      totalFixCount += stat.fixCount ?? stat.errorCount ?? 0
+      totalCommitCount += stat.commitCount ?? stat.activeFileCount ?? 0
+      totalErrorCount += stat.errorCount ?? stat.fixCount ?? 0
     })
 
     res.json({
@@ -388,6 +506,8 @@ app.get('/api/term-stats', authenticateToken, async (req, res) => {
         solarTerm,
         dailyStats: stats,
         totalCodeLines,
+        totalActiveFileCount,
+        totalFixCount,
         totalCommitCount,
         totalErrorCount
       }
@@ -443,19 +563,23 @@ app.post('/api/reports', authenticateToken, async (req, res) => {
     const stats = await TermDailyStat.find({ userId, solarTerm }).sort({ date: 1 })
 
     let totalCodeLines = 0
+    let totalActiveFileCount = 0
+    let totalFixCount = 0
     let totalCommitCount = 0
     let totalErrorCount = 0
     stats.forEach((stat) => {
       totalCodeLines += stat.codeLines || 0
-      totalCommitCount += stat.commitCount || 0
-      totalErrorCount += stat.errorCount || 0
+      totalActiveFileCount += stat.activeFileCount ?? stat.commitCount ?? 0
+      totalFixCount += stat.fixCount ?? stat.errorCount ?? 0
+      totalCommitCount += stat.commitCount ?? stat.activeFileCount ?? 0
+      totalErrorCount += stat.errorCount ?? stat.fixCount ?? 0
     })
 
     const report = await TermReport.findOneAndUpdate(
       { userId, solarTerm },
       {
         $set: {
-          periodStart, periodEnd, totalCodeLines, totalCommitCount, totalErrorCount,
+          periodStart, periodEnd, totalCodeLines, totalActiveFileCount, totalFixCount, totalCommitCount, totalErrorCount,
           plantStage, harvestStage, harvestTier, harvestItemName, dailyStats: stats, summary
         }
       },
@@ -542,9 +666,6 @@ async function migrateOldUsers() {
     console.error('迁移失败:', error)
   }
 }
-// 运行迁移脚本
-migrateOldUsers()
-
 app.listen(PORT, () => {
   console.log(`CS Valley server listening at http://localhost:${PORT}`)
 })

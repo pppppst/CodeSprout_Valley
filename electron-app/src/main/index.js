@@ -15,8 +15,8 @@ let tray = null
 let pluginBridgeServer = null
 let latestPluginActivity = {
   codeAdded: 0,
-  errorCount: 0,
-  codePassed: 0,
+  activeFileIncrement: 0,
+  fixCountIncrement: 0,
   codingDuration: 0,
   timestamp: 0
 }
@@ -67,7 +67,7 @@ function startPluginBridgeServer() {
         const incoming = JSON.parse(body || '{}')
 
         // 数值字段做累加（以便主进程维持一个当天累积快照），非数值字段直接覆盖
-        const numericKeys = ['codeAdded', 'errorCount', 'codePassed', 'codingDuration']
+        const numericKeys = ['codeAdded', 'activeFileIncrement', 'fixCountIncrement', 'codingDuration']
         numericKeys.forEach((k) => {
           if (typeof incoming[k] === 'number' && Number.isFinite(incoming[k])) {
             latestPluginActivity[k] = (latestPluginActivity[k] || 0) + incoming[k]

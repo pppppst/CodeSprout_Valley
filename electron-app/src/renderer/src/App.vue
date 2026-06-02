@@ -38,8 +38,8 @@ function normalizePendingSync(value) {
   const codeLines = Math.max(0, Number(value?.codeLines || 0))
   return {
     codeLines,
-    commitCount: Math.max(0, Number(value?.commitCount || 0)),
-    errorCount: Math.max(0, Number(value?.errorCount || 0)),
+    activeFileCount: Math.max(0, Number(value?.activeFileCount ?? value?.commitCount ?? 0)),
+    fixCount: Math.max(0, Number(value?.fixCount ?? value?.errorCount ?? 0)),
     archiveCodeLines: Math.max(0, Number(value?.archiveCodeLines ?? codeLines)),
     leftoverLines: Math.max(0, Number(value?.leftoverLines || 0))
   }
@@ -60,7 +60,7 @@ function loadPendingSyncFromStorage(username = loggedInUser.value) {
 
 function savePendingSyncToStorage() {
   const normalized = normalizePendingSync(pendingSync.value)
-  if (normalized.codeLines === 0 && normalized.commitCount === 0 && normalized.errorCount === 0 && normalized.archiveCodeLines === 0 && normalized.leftoverLines === 0) {
+  if (normalized.codeLines === 0 && normalized.activeFileCount === 0 && normalized.fixCount === 0 && normalized.archiveCodeLines === 0 && normalized.leftoverLines === 0) {
     clearPendingSyncStorage()
     return
   }
@@ -324,7 +324,7 @@ async function processAutoSync() {
   if (!isAuthenticated.value) return
   if (autoSyncInFlight) return
 
-  const hasPendingStats = pendingSync.value.codeLines > 0 || pendingSync.value.commitCount > 0 || pendingSync.value.errorCount > 0
+  const hasPendingStats = pendingSync.value.codeLines > 0 || pendingSync.value.activeFileCount > 0 || pendingSync.value.fixCount > 0
   const localUnsyncedLines = Math.max(0, Number(pendingSync.value.archiveCodeLines || 0))
   const leftoverLines = Math.max(0, Number(pendingSync.value.leftoverLines || 0))
 
@@ -391,18 +391,17 @@ async function processAutoSync() {
         date: getTodayString(),
         solarTerm: currentSolarTerm.value || '未知',
         codeLines: pendingSync.value.codeLines,
-        commitCount: pendingSync.value.commitCount,
-        errorCount: pendingSync.value.errorCount
+        activeFileCount: pendingSync.value.activeFileCount,
+        fixCount: pendingSync.value.fixCount
       }
 
       await uploadTermDailyStat(cloudToken.value, statsPayload)
 
       // 🌟 核心防丢机制：只有云端返回成功，才清空本地缓冲池
       pendingSync.value.codeLines = 0
-      pendingSync.value.commitCount = 0
-      pendingSync.value.errorCount = 0
+      pendingSync.value.activeFileCount = 0
+      pendingSync.value.fixCount = 0
       pendingSync.value.archiveCodeLines = 0
-      clearPendingSyncStorage()
     }
     if (hasAutoSyncFailure) {
       authStatusMessage.value = '自动同步已恢复，暂存数据已补传'
@@ -439,7 +438,7 @@ function handleLogout() {
   selectedArchiveTermKey.value = ''
   latestHarvestTermKey.value = ''
   latestReportTermKey.value = ''
-  pendingSync.value = { codeLines: 0, commitCount: 0, errorCount: 0, archiveCodeLines: 0 }
+  pendingSync.value = { codeLines: 0, activeFileCount: 0, fixCount: 0, archiveCodeLines: 0, leftoverLines: 0 }
   isSettingsPanelOpen.value = false
   isCloudAccountPanelOpen.value = false
   isUserProfilePanelOpen.value = false
@@ -499,8 +498,8 @@ const waterCount = ref(0)
 const foodStock = ref(20)
 const waterStock = ref(20)
 
-const todayPassed = ref(0)
-const todayErrors = ref(0)
+const todayActiveFiles = ref(0)
+const todayFixes = ref(0)
 let offActivityUpdate = null
 const isStatsVisible = ref(true)
 const isSettingsPanelOpen = ref(false)
@@ -826,8 +825,8 @@ function resetToday() {
   // 重置今日统计
   feedCount.value = 0
   waterCount.value = 0
-  todayPassed.value = 0
-  todayErrors.value = 0
+  todayActiveFiles.value = 0
+  todayFixes.value = 0
 
   // 清除喂食记录，让猫可以重新喂食
   lastFedDate.value = ''
@@ -856,22 +855,22 @@ function applyActivityUpdate(data) {
     pendingSync.value.archiveCodeLines = Math.max(0, Number(pendingSync.value.archiveCodeLines || 0)) + data.codeAdded
   }
 
-  if (typeof data.codePassed === 'number' && Number.isFinite(data.codePassed) && data.codePassed > 0) {
-    catExp.value += data.codePassed * 5
-    todayPassed.value += data.codePassed
-    pendingSync.value.commitCount += data.codePassed // 🌟 存入缓冲池 (暂用通过数代表提交数)
+  if (typeof data.activeFileIncrement === 'number' && Number.isFinite(data.activeFileIncrement) && data.activeFileIncrement > 0) {
+    catExp.value += data.activeFileIncrement * 5
+    todayActiveFiles.value += data.activeFileIncrement
+    pendingSync.value.activeFileCount += data.activeFileIncrement
     
-    message.value = `✅ ${data.codePassed} 个文件通过，经验提升中...`
+    message.value = `✅ ${data.activeFileIncrement} 个活跃文件已记录，经验提升中...`
     catState.value = 'happy'
     resetCatState(2500)
   }
 
-  if (typeof data.errorCount === 'number' && Number.isFinite(data.errorCount) && data.errorCount > 0) {
-    todayErrors.value += data.errorCount
-    pendingSync.value.errorCount += data.errorCount // 🌟 存入缓冲池
+  if (typeof data.fixCountIncrement === 'number' && Number.isFinite(data.fixCountIncrement) && data.fixCountIncrement > 0) {
+    todayFixes.value += data.fixCountIncrement
+    pendingSync.value.fixCount += data.fixCountIncrement
     
-    message.value = `⚠️ 发现 ${data.errorCount} 个新错误，快去看看吧！`
-    catState.value = 'refused' 
+    message.value = `🛠️ 修复 ${data.fixCountIncrement} 个问题文件，继续保持！`
+    catState.value = 'happy'
     resetCatState(3000)
   }
 }
@@ -919,9 +918,9 @@ async function openArchive() {
               date: `${report.periodStart} 生成`,
               owner: loggedInUser.value || '本地种植者',
               totalCodeLines: displayCodeLines, // 👈 使用修复后的数值
-              todayPassed: report.totalCommitCount,
-              todayErrors: report.totalErrorCount,
-              passRate: formatPassRate(report.totalCommitCount, report.totalErrorCount),
+              activeFileCount: getReportActiveFileCount(report),
+              fixCount: getReportFixCount(report),
+              fixRate: formatFixRate(getReportActiveFileCount(report), getReportFixCount(report)),
               totalActions: '已归档',
               plantStage: report.harvestTier && Number.isFinite(Number(report.plantStage)) ? Number(report.plantStage) : '已归档',
               syncText: '☁️ 云端永久快照',
@@ -992,8 +991,10 @@ async function generateAndSaveCloudReport() {
     if (!statsRes.success) throw new Error(statsRes.message)
 
     const data = statsRes.data
-    const passRate = formatPassRate(data.totalCommitCount, data.totalErrorCount)
-    const summaryText = `${SOLAR_TERM_REPORT_YEAR} 年${termName}节气已结算。云端记录显示：本节气期间累计编写代码 ${data.totalCodeLines} 行，通过/提交 ${data.totalCommitCount} 次，发生报错 ${data.totalErrorCount} 次，通过率 ${passRate}。`
+    const activeFileCount = getReportActiveFileCount(data)
+    const fixCount = getReportFixCount(data)
+    const fixRate = formatFixRate(activeFileCount, fixCount)
+    const summaryText = `${SOLAR_TERM_REPORT_YEAR} 年${termName}节气已结算。云端记录显示：本节气期间累计编写代码 ${data.totalCodeLines} 行，活跃文件 ${activeFileCount} 个，修复次数 ${fixCount} 次，修复率 ${fixRate}。`
 
     const stage = selectedArchiveHarvestRecord.value?.stage || getPlantStageByWaterings(plantWaterByTerm.value[termKey] || 0)
     const tier = getHarvestTierByStage(stage)
@@ -1020,9 +1021,9 @@ async function generateAndSaveCloudReport() {
       date: `${savedReport.periodStart || getTodayString()} 生成`,
       owner: loggedInUser.value || '本地种植者',
       totalCodeLines: savedReport.totalCodeLines ?? data.totalCodeLines,
-      todayPassed: savedReport.totalCommitCount ?? data.totalCommitCount,
-      todayErrors: savedReport.totalErrorCount ?? data.totalErrorCount,
-      passRate: formatPassRate(savedReport.totalCommitCount ?? data.totalCommitCount, savedReport.totalErrorCount ?? data.totalErrorCount),
+      activeFileCount: getReportActiveFileCount(savedReport) || activeFileCount,
+      fixCount: getReportFixCount(savedReport) || fixCount,
+      fixRate: formatFixRate(getReportActiveFileCount(savedReport) || activeFileCount, getReportFixCount(savedReport) || fixCount),
       totalActions: '已归档',
       plantStage: stage,
       syncText: '☁️ 云端永久快照',
@@ -1192,12 +1193,19 @@ function formatDateForApi(date) {
   return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`
 }
 
-function formatPassRate(passCount, errorCount) {
-  const passed = Math.max(0, Number(passCount || 0))
-  const errors = Math.max(0, Number(errorCount || 0))
-  const total = passed + errors
-  if (total === 0) return '暂无检测记录'
-  return `${Math.round((passed / total) * 100)}%`
+function getReportActiveFileCount(source) {
+  return Math.max(0, Number(source?.totalActiveFileCount ?? source?.activeFileCount ?? source?.totalCommitCount ?? source?.commitCount ?? 0))
+}
+
+function getReportFixCount(source) {
+  return Math.max(0, Number(source?.totalFixCount ?? source?.fixCount ?? source?.totalErrorCount ?? source?.errorCount ?? 0))
+}
+
+function formatFixRate(activeFileCount, fixCount) {
+  const activeFiles = Math.max(0, Number(activeFileCount || 0))
+  const fixes = Math.max(0, Number(fixCount || 0))
+  if (activeFiles === 0) return '暂无活跃文件记录'
+  return `${Math.round((fixes / activeFiles) * 100)}%`
 }
 
 function buildSolarTermTimeline2026() {
@@ -1781,8 +1789,8 @@ function captureCurrentState() {
     mockDateString: mockDateString.value,
     codeLines: codeLines.value,
     catExp: catExp.value,
-    todayPassed: todayPassed.value,
-    todayErrors: todayErrors.value,
+    todayActiveFiles: todayActiveFiles.value,
+    todayFixes: todayFixes.value,
     feedCount: feedCount.value,
     waterCount: waterCount.value,
     foodStock: foodStock.value,
@@ -1802,8 +1810,8 @@ function restoreSnapshot(snapshot) {
   if (!snapshot) return
   mockDateString.value = snapshot.mockDateString
   catExp.value = snapshot.catExp
-  todayPassed.value = snapshot.todayPassed
-  todayErrors.value = snapshot.todayErrors
+  todayActiveFiles.value = snapshot.todayActiveFiles
+  todayFixes.value = snapshot.todayFixes
   feedCount.value = snapshot.feedCount
   waterCount.value = snapshot.waterCount
   foodStock.value = snapshot.foodStock
@@ -1862,8 +1870,8 @@ function applyTimeMachine() {
   waterStock.value = Math.min(highestRewardedThreshold.value, Math.floor(MAX_WATER_REWARDED_LINES / CODE_LINES_PER_REWARD)) * RESOURCE_PER_REWARD
   feedCount.value = 0
   waterCount.value = 0
-  todayPassed.value = 0
-  todayErrors.value = 0
+  todayActiveFiles.value = 0
+  todayFixes.value = 0
   plantWaterByTerm.value = { [termKey]: getMinimumWateringsForPlantStage(tmSettlementStage.value) }
   isTimeMachineOpen.value = false
   timeMachineError.value = ''
@@ -1932,11 +1940,9 @@ function simulateTermSettlement() {
     date: `${settledDate.getFullYear()}年${pad2(settledDate.getMonth() + 1)}月${pad2(settledDate.getDate())}日`,
     owner: loggedInUser.value || '本地用户',
     totalCodeLines: totalCodeLines.value,
-    todayPassed: todayPassed.value,
-    todayErrors: todayErrors.value,
-    passRate: todayPassed.value + todayErrors.value === 0
-      ? '暂无检测记录'
-      : `${Math.round((todayPassed.value / (todayPassed.value + todayErrors.value)) * 100)}%`,
+    activeFileCount: todayActiveFiles.value,
+    fixCount: todayFixes.value,
+    fixRate: formatFixRate(todayActiveFiles.value, todayFixes.value),
     totalActions,
     plantStage: stage,
     syncText: '沙盘模拟结算，不会同步云端',
@@ -2250,8 +2256,8 @@ onUnmounted(() => {
           <div class="stat-detail">
             <p>🍖 今日喂食: {{ feedCount }} 次</p>
             <p>💧 今日浇水: {{ waterCount }} 次</p>
-            <p>✅ 今日通过: {{ todayPassed }} 个</p>
-            <p>⚠️ 今日报错: {{ todayErrors }} 个</p>
+            <p>✅ 今日活跃文件: {{ todayActiveFiles }} 个</p>
+            <p>🛠️ 今日修复次数: {{ todayFixes }} 次</p>
             <p>🧺 剩余猫粮: {{ foodStock }}</p>
             <p>🚿 剩余水量: {{ waterStock }}</p>
           </div>
@@ -2443,9 +2449,9 @@ onUnmounted(() => {
 
                   <div v-if="selectedArchiveReportRecord" class="term-report-data-grid">
                     <div class="term-report-data-item"><span>累计代码</span><strong>{{ selectedArchiveReportRecord.totalCodeLines }}</strong></div>
-                    <div class="term-report-data-item"><span>通过率</span><strong>{{ selectedArchiveReportRecord.passRate }}</strong></div>
-                    <div class="term-report-data-item"><span>通过/提交</span><strong>{{ selectedArchiveReportRecord.todayPassed }}</strong></div>
-                    <div class="term-report-data-item"><span>报错次数</span><strong>{{ selectedArchiveReportRecord.todayErrors }}</strong></div>
+                    <div class="term-report-data-item"><span>修复率</span><strong>{{ selectedArchiveReportRecord.fixRate }}</strong></div>
+                    <div class="term-report-data-item"><span>活跃文件</span><strong>{{ selectedArchiveReportRecord.activeFileCount }}</strong></div>
+                    <div class="term-report-data-item"><span>修复次数</span><strong>{{ selectedArchiveReportRecord.fixCount }}</strong></div>
                     <div class="term-report-data-item"><span>照料次数</span><strong>{{ selectedArchiveReportRecord.totalActions }}</strong></div>
                     <div class="term-report-data-item"><span>植物阶段</span><strong>{{ selectedArchiveReportRecord.plantStage }}</strong></div>
                   </div>
@@ -4170,3 +4176,4 @@ body.floating {
   height: 100% !important;
 }
 </style>
+

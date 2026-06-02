@@ -81,7 +81,7 @@ export function syncCloudSave(token, payload) {
 
 // 1. 上传/累加当天的节气每日统计
 export function uploadTermDailyStat(token, payload) {
-  // payload 包含: { date, solarTerm, codeLines, commitCount, errorCount }
+  // payload 包含: { date, solarTerm, codeLines, activeFileCount, fixCount }
   return request('/api/term-stats', {
     method: 'POST',
     headers: authHeaders(token),

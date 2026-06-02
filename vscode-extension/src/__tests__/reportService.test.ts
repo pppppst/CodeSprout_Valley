@@ -66,7 +66,7 @@ describe('reportService', () => {
     const { reportActivityToElectron } = await loadReportService()
 
     reportActivityToElectron({ codeAdded: 1 })
-    reportActivityToElectron({ codeAdded: 2, codingDuration: 5 })
+    reportActivityToElectron({ codeAdded: 2, activeFileIncrement: 1, fixCountIncrement: 1, codingDuration: 5 })
 
     await vi.runAllTimersAsync()
 
@@ -74,6 +74,8 @@ describe('reportService', () => {
     const [, options] = (globalThis.fetch as any).mock.calls[0]
     const payload = JSON.parse(options.body)
     expect(payload.codeAdded).toBe(3)
+    expect(payload.activeFileIncrement).toBe(1)
+    expect(payload.fixCountIncrement).toBe(1)
     expect(payload.codingDuration).toBe(5)
     expect(typeof payload.timestamp).toBe('number')
   })
@@ -96,18 +98,18 @@ describe('reportService', () => {
       await loadReportService()
 
     initializeReportService(context)
-    await reportActivityToElectronImmediately({ codeAdded: 4 })
+    await reportActivityToElectronImmediately({ codeAdded: 4, activeFileIncrement: 2, fixCountIncrement: 1 })
 
     const stored = (context.globalState as any).get(
       'csvalley.pendingActivityReportData',
       {}
     )
-    expect(stored).toMatchObject({ codeAdded: 4 })
+    expect(stored).toMatchObject({ codeAdded: 4, activeFileIncrement: 2, fixCountIncrement: 1 })
   })
 
   it('retries persisted payloads until success', async () => {
     const context = createContext({
-      'csvalley.pendingActivityReportData': { codeAdded: 2 }
+      'csvalley.pendingActivityReportData': { codeAdded: 2, activeFileIncrement: 1, fixCountIncrement: 1 }
     })
 
     ;(globalThis.fetch as any)
