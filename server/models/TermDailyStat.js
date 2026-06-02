@@ -5,6 +5,8 @@ const termDailyStatSchema = new mongoose.Schema({
   date: { type: String, required: true }, // 例如："2026-05-16"
   solarTerm: { type: String, required: true }, // 例如："立夏"
   codeLines: { type: Number, default: 0 },
+  activeFileCount: { type: Number, default: 0 },
+  fixCount: { type: Number, default: 0 },
   commitCount: { type: Number, default: 0 },
   errorCount: { type: Number, default: 0 }
 }, { 

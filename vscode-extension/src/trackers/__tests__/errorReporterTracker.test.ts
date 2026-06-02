@@ -1,9 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 type Listener<T> = (event: T) => void
-
 type Disposable = { dispose: () => void }
-
 type MockEmitter<T> = {
   event: (listener: Listener<T>) => Disposable
   fire: (event: T) => void
@@ -26,13 +24,9 @@ function createEmitter<T>(): MockEmitter<T> {
   }
 }
 
-const debugEmitter = createEmitter<any>()
+const saveTextEmitter = createEmitter<any>()
+const saveNotebookEmitter = createEmitter<any>()
 let diagnostics: any[] = []
-
-const windowState = {
-  activeTextEditor: undefined as any,
-  visibleTextEditors: [] as any[]
-}
 
 vi.mock('vscode', () => ({
   DiagnosticSeverity: {
@@ -42,19 +36,9 @@ vi.mock('vscode', () => ({
   languages: {
     getDiagnostics: vi.fn(() => diagnostics)
   },
-  debug: {
-    onDidStartDebugSession: (listener: Listener<any>) => debugEmitter.event(listener)
-  },
-  window: {
-    get activeTextEditor() {
-      return windowState.activeTextEditor
-    },
-    get visibleTextEditors() {
-      return windowState.visibleTextEditors
-    }
-  },
   workspace: {
-    textDocuments: [] as any[]
+    onDidSaveTextDocument: (listener: Listener<any>) => saveTextEmitter.event(listener),
+    onDidSaveNotebookDocument: (listener: Listener<any>) => saveNotebookEmitter.event(listener)
   }
 }))
 
@@ -64,13 +48,14 @@ vi.mock('../../reportService', () => ({
   reportActivityToElectronImmediately: reportSpy
 }))
 
-function createDocument(path: string) {
+function createDocument(path: string, text = 'const value = 1') {
   return {
     uri: {
       scheme: 'file',
       fsPath: path
     },
-    isUntitled: false
+    isUntitled: false,
+    getText: () => text
   }
 }
 
@@ -83,8 +68,6 @@ beforeEach(() => {
   vi.useFakeTimers()
   reportSpy.mockClear()
   diagnostics = []
-  windowState.activeTextEditor = undefined
-  windowState.visibleTextEditors = []
 })
 
 afterEach(() => {
@@ -92,62 +75,59 @@ afterEach(() => {
 })
 
 describe('errorReporterTracker', () => {
-  it('reports error increment for blocking diagnostics', async () => {
+  it('reports active file increment when a valid edited file is saved', async () => {
     const tracker = await loadTracker()
     const document = createDocument('C:/demo.ts')
 
-    windowState.activeTextEditor = { document }
+    tracker.activateErrorReporterTracker({ subscriptions: [] } as any)
+    saveTextEmitter.fire(document)
+
+    await vi.advanceTimersByTimeAsync(1000)
+
+    expect(reportSpy).toHaveBeenCalledWith({
+      activeFileIncrement: 1,
+      fixCountIncrement: 0
+    })
+  })
+
+  it('reports fix increment when a problem file becomes clean', async () => {
+    const tracker = await loadTracker()
+    const document = createDocument('C:/demo.py')
+
+    tracker.activateErrorReporterTracker({ subscriptions: [] } as any)
+
     diagnostics = [
       {
         severity: 0,
         message: 'bad'
       }
     ]
+    saveTextEmitter.fire(document)
+    await vi.advanceTimersByTimeAsync(1000)
 
-    tracker.activateErrorReporterTracker({ subscriptions: [] } as any)
-    debugEmitter.fire({ parentSession: undefined })
+    reportSpy.mockClear()
+    diagnostics = []
+    saveTextEmitter.fire(document)
+    await vi.advanceTimersByTimeAsync(1000)
 
-    await vi.advanceTimersByTimeAsync(800)
-    await vi.advanceTimersByTimeAsync(3000)
-
-    expect(reportSpy).toHaveBeenCalledWith({ errorCount: 1 })
+    expect(reportSpy).toHaveBeenCalledWith({
+      activeFileIncrement: 0,
+      fixCountIncrement: 1
+    })
   })
 
-  it('treats certain python warnings as blocking', async () => {
-    const tracker = await loadTracker()
-    const document = createDocument('C:/demo.py')
-
-    windowState.activeTextEditor = { document }
-    diagnostics = [
-      {
-        severity: 1,
-        code: 'reportUndefinedVariable',
-        message: 'undefined'
-      }
-    ]
-
-    tracker.activateErrorReporterTracker({ subscriptions: [] } as any)
-    debugEmitter.fire({ parentSession: undefined })
-
-    await vi.advanceTimersByTimeAsync(800)
-    await vi.advanceTimersByTimeAsync(3000)
-
-    expect(reportSpy).toHaveBeenCalledWith({ errorCount: 1 })
-  })
-
-  it('reports pass increment when no blocking diagnostics', async () => {
+  it('does not count the same active file twice in one session', async () => {
     const tracker = await loadTracker()
     const document = createDocument('C:/demo.ts')
 
-    windowState.activeTextEditor = { document }
-    diagnostics = []
-
     tracker.activateErrorReporterTracker({ subscriptions: [] } as any)
-    debugEmitter.fire({ parentSession: undefined })
+    saveTextEmitter.fire(document)
+    await vi.advanceTimersByTimeAsync(1000)
 
-    await vi.advanceTimersByTimeAsync(800)
-    await vi.advanceTimersByTimeAsync(3000)
+    reportSpy.mockClear()
+    saveTextEmitter.fire(document)
+    await vi.advanceTimersByTimeAsync(1000)
 
-    expect(reportSpy).toHaveBeenCalledWith({ codePassed: 1 })
+    expect(reportSpy).not.toHaveBeenCalled()
   })
 })

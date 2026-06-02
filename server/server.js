@@ -28,6 +28,25 @@ const SOLAR_TERMS_2026 = {
   '冬至': { start: '2026-12-21T00:00:00+08:00', end: '2027-01-05T00:00:00+08:00' }
 }
 
+// 🌟 新增：获取北京时间的 YYYY-MM-DD 字符串 (用于判断是否跨天)
+function getBeijingDateStr(timestamp) {
+  if (!timestamp) return '';
+  const d = new Date(timestamp + 8 * 3600000);
+  return d.toISOString().split('T')[0];
+}
+
+// 🌟 新增：根据时间戳获取对应的节气名称 (用于判断是否跨节气)
+function getSolarTermByTime(timestamp) {
+  for (const [term, schedule] of Object.entries(SOLAR_TERMS_2026)) {
+    const start = new Date(schedule.start).getTime();
+    const end = new Date(schedule.end).getTime();
+    if (timestamp >= start && timestamp < end) {
+      return term;
+    }
+  }
+  return null;
+}
+
 const express = require('express')
 const mongoose = require('mongoose')
 const cors = require('cors')
@@ -62,57 +81,21 @@ mongoose.connect(MONGO_URI, { serverSelectionTimeoutMS: 5000 })
   .then(async () => {
     console.log('MongoDB connected')
     await ensureAdminAccount()
+    await migrateOldUsers()
   })
   .catch((err) => {
     console.error('MongoDB connection failed:', err.message)
     process.exit(1)
   })
 
-function sanitizeUser(user) {
-  const registrationDate = user.createdAt || user._id.getTimestamp()
-  const role = user.role === 'admin' ? 'admin' : 'user'
-
-  return {
-    username: user.username,
-    role,
-    isAdmin: role === 'admin',
-    nickname: user.nickname || '',
-    birthday: user.birthday || '',
-    totalCodeLines: user.totalCodeLines || 0,
-    catFood: user.catFood || 0,
-    waterDrops: user.waterDrops || 0,
-    plantStage: user.plantStage || 1,
-    lastSyncTime: user.lastSyncTime,
-    registeredAt: registrationDate.toISOString(),
-    updatedAt: user.updatedAt
-  }
-}
-
-function sanitizeAdminUser(user) {
-  const registrationDate = user.createdAt || user._id.getTimestamp()
-
-  return {
-    username: user.username,
-    nickname: user.nickname || '',
-    birthday: user.birthday || '',
-    totalCodeLines: user.totalCodeLines || 0,
-    catFood: user.catFood || 0,
-    waterDrops: user.waterDrops || 0,
-    plantStage: user.plantStage || 1,
-    lastSyncTime: user.lastSyncTime,
-    registeredAt: registrationDate.toISOString(),
-    updatedAt: user.updatedAt
-  }
-}
-
 async function ensureAdminAccount() {
   if (!ADMIN_USERNAME || !ADMIN_PASSWORD) {
-    console.log('Admin account initialization skipped: ADMIN_USERNAME or ADMIN_PASSWORD is not set.')
+    console.warn('Admin account is not configured. Set ADMIN_USERNAME and ADMIN_PASSWORD to enable admin login.')
     return
   }
 
-  if (ADMIN_USERNAME.length > 32 || ADMIN_PASSWORD.length < 6) {
-    console.warn('Admin account initialization skipped: username must be at most 32 chars and password at least 6 chars.')
+  if (ADMIN_PASSWORD.length < 6) {
+    console.warn('Admin account is not configured. ADMIN_PASSWORD must be at least 6 chars.')
     return
   }
 
@@ -130,18 +113,58 @@ async function ensureAdminAccount() {
       waterDrops: 0,
       plantStage: 1
     })
-    console.log(`Admin account created: ${ADMIN_USERNAME}`)
+    console.log(`Admin account ready: ${ADMIN_USERNAME}`)
     return
   }
 
-  const update = { role: 'admin' }
-  const passwordMatches = await bcrypt.compare(ADMIN_PASSWORD, existingAdmin.password)
-  if (!passwordMatches) {
-    update.password = await bcrypt.hash(ADMIN_PASSWORD, salt)
+  let shouldSave = false
+  if (existingAdmin.role !== 'admin') {
+    existingAdmin.role = 'admin'
+    shouldSave = true
   }
 
-  await User.updateOne({ _id: existingAdmin._id }, { $set: update })
+  const passwordMatches = await bcrypt.compare(ADMIN_PASSWORD, existingAdmin.password)
+  if (!passwordMatches) {
+    existingAdmin.password = await bcrypt.hash(ADMIN_PASSWORD, salt)
+    shouldSave = true
+  }
+
+  if (shouldSave) {
+    await existingAdmin.save()
+  }
+
   console.log(`Admin account ready: ${ADMIN_USERNAME}`)
+}
+
+function sanitizeUser(user) {
+  const registrationDate = user.createdAt || user._id.getTimestamp()
+  
+  const now = Date.now()
+  const todayStr = getBeijingDateStr(now)
+  const currentTerm = getSolarTermByTime(now)
+
+  // 🌟 核心解耦：今日清今日的，节气清节气的！
+  const displayTodayLines = (user.lastCodeDate !== todayStr) ? 0 : (user.todayCodeLines || 0)
+  const displayTotalLines = (user.lastTermReset !== currentTerm) ? 0 : (user.totalCodeLines || 0)
+  
+  const displayCatFood = (user.lastTermReset !== currentTerm) ? 0 : (user.catFood || 0)
+  const displayWaterDrops = (user.lastTermReset !== currentTerm) ? 0 : (user.waterDrops || 0)
+  const displayPlantStage = (user.lastTermReset !== currentTerm) ? 1 : (user.plantStage || 1)
+
+  return {
+    username: user.username,
+    role: user.role || 'user',
+    isAdmin: user.role === 'admin',
+    nickname: user.nickname || '',
+    birthday: user.birthday || '',
+    totalCodeLines: displayTotalLines, // 这个继续给你们的【节气周报】用
+    todayCodeLines: displayTodayLines, // 🌟 这个给前端的【实时主界面】用！
+    catFood: displayCatFood,
+    waterDrops: displayWaterDrops,
+    plantStage: displayPlantStage,
+    lastSyncTime: user.lastSyncTime,
+    registeredAt: registrationDate.toISOString() 
+  }
 }
 
 function authenticateToken(req, res, next) {
@@ -161,26 +184,34 @@ function authenticateToken(req, res, next) {
 }
 
 async function authenticateAdmin(req, res, next) {
-  try {
-    const user = await User.findById(req.auth.userId)
-    if (!user) {
-      return res.status(404).json({ success: false, message: 'User save not found.' })
-    }
+  authenticateToken(req, res, async () => {
+    try {
+      const user = await User.findById(req.auth.userId)
+      if (!user) {
+        return res.status(404).json({ success: false, message: 'User save not found.' })
+      }
 
-    if (user.role !== 'admin') {
-      return res.status(403).json({ success: false, message: 'Admin permission is required.' })
-    }
+      if (user.role !== 'admin') {
+        return res.status(403).json({ success: false, message: 'Admin permission required.' })
+      }
 
-    req.adminUser = user
-    next()
-  } catch (error) {
-    console.error('Admin auth failed:', error)
-    res.status(500).json({ success: false, message: 'Server error.' })
-  }
+      req.adminUser = user
+      next()
+    } catch (error) {
+      console.error('Admin auth failed:', error)
+      res.status(500).json({ success: false, message: 'Server error.' })
+    }
+  })
 }
 
 function isNonNegativeFiniteNumber(value) {
   return Number.isFinite(value) && value >= 0
+}
+
+function readNonNegativeMetric(primaryValue, legacyValue) {
+  const rawValue = primaryValue !== undefined ? primaryValue : legacyValue
+  const value = Number(rawValue || 0)
+  return Number.isFinite(value) ? value : NaN
 }
 
 app.get('/', (req, res) => {
@@ -211,7 +242,6 @@ app.post('/api/register', async (req, res) => {
     const newUser = new User({
       username,
       password: hashedPassword,
-      role: 'user',
       totalCodeLines: 0,
       catFood: 0,
       waterDrops: 0,
@@ -246,7 +276,7 @@ app.post('/api/login', async (req, res) => {
     }
 
     const token = jwt.sign(
-      { userId: user._id.toString(), username: user.username, role: user.role === 'admin' ? 'admin' : 'user' },
+      { userId: user._id.toString(), username: user.username, role: user.role || 'user' },
       JWT_SECRET,
       { expiresIn: '7d' }
     )
@@ -266,42 +296,57 @@ app.post('/api/login', async (req, res) => {
 
 app.post('/api/sync', authenticateToken, async (req, res) => {
   try {
-    const addedLines = Number(req.body.addedLines || 0)
-    const catFood = Number(req.body.catFood || 0)
-    const waterDrops = Number(req.body.waterDrops || 0)
-    const plantStage = Number(req.body.plantStage || 1)
+    const addedLines = Number(req.body.addedLines || 0);
+    let catFood = Number(req.body.catFood || 0);
+    let waterDrops = Number(req.body.waterDrops || 0);
+    let plantStage = Number(req.body.plantStage || 1);
 
     if (!Number.isFinite(addedLines) || addedLines < 0 || addedLines > 5000) {
-      return res.status(400).json({ success: false, message: 'Invalid addedLines value.' })
+      return res.status(400).json({ success: false, message: 'Invalid addedLines value.' });
     }
-
     if (![catFood, waterDrops, plantStage].every(Number.isFinite)) {
-      return res.status(400).json({ success: false, message: 'Invalid sync payload.' })
+      return res.status(400).json({ success: false, message: 'Invalid sync payload.' });
     }
 
-    const updatedUser = await User.findByIdAndUpdate(
-      req.auth.userId,
-      {
-        $inc: { totalCodeLines: addedLines },
-        $set: {
-          catFood: Math.max(0, catFood),
-          waterDrops: Math.max(0, waterDrops),
-          plantStage: Math.max(1, Math.min(4, plantStage)),
-          lastSyncTime: Date.now()
-        }
-      },
-      { new: true }
-    )
-
-    if (!updatedUser) {
-      return res.status(404).json({ success: false, message: 'User save not found.' })
+    const user = await User.findById(req.auth.userId);
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User save not found.' });
     }
 
-    console.log(`[sync] ${updatedUser.username}: +${addedLines} lines`)
-    res.json({ success: true, message: 'Cloud sync completed.', data: sanitizeUser(updatedUser) })
+    const now = Date.now();
+    const todayStr = getBeijingDateStr(now);
+    const currentTerm = getSolarTermByTime(now);
+
+    // 🌟 轨道 1：【每日清零逻辑】只针对 todayCodeLines
+    if (user.lastCodeDate !== todayStr) {
+      user.todayCodeLines = addedLines; // 跨天，今天从新增的行数重新算
+      user.lastCodeDate = todayStr;
+    } else {
+      user.todayCodeLines = (user.todayCodeLines || 0) + addedLines;
+    }
+
+    // 🌟 轨道 2：【节气清零逻辑】针对 totalCodeLines 和 猫粮等
+    if (user.lastTermReset !== currentTerm) {
+      user.totalCodeLines = addedLines; // 跨节气了，节气总数重新算
+      user.catFood = 0;
+      user.waterDrops = 0;
+      user.plantStage = 1;
+      user.lastTermReset = currentTerm;
+    } else {
+      user.totalCodeLines = (user.totalCodeLines || 0) + addedLines; // 没跨节气，总数疯狂累加！
+      user.catFood = Math.max(0, catFood);
+      user.waterDrops = Math.max(0, waterDrops);
+      user.plantStage = Math.max(1, Math.min(4, plantStage));
+    }
+
+    user.lastSyncTime = now;
+    await user.save();
+
+    console.log(`[sync] ${user.username}: lines=${user.totalCodeLines}, term=${currentTerm}`);
+    res.json({ success: true, message: 'Cloud sync completed.', data: sanitizeUser(user) });
   } catch (error) {
-    console.error('Sync failed:', error)
-    res.status(500).json({ success: false, message: 'Server error.' })
+    console.error('Sync failed:', error);
+    res.status(500).json({ success: false, message: 'Server error.' });
   }
 })
 
@@ -315,16 +360,6 @@ app.get('/api/user/me', authenticateToken, async (req, res) => {
     res.json({ success: true, data: sanitizeUser(user) })
   } catch (error) {
     console.error('Fetch user failed:', error)
-    res.status(500).json({ success: false, message: 'Server error.' })
-  }
-})
-
-app.get('/api/admin/users', authenticateToken, authenticateAdmin, async (req, res) => {
-  try {
-    const users = await User.find({}).sort({ createdAt: -1, username: 1 })
-    res.json({ success: true, data: users.map(sanitizeAdminUser) })
-  } catch (error) {
-    console.error('Fetch admin users failed:', error)
     res.status(500).json({ success: false, message: 'Server error.' })
   }
 })
@@ -368,20 +403,49 @@ app.get('/api/user/:username', authenticateToken, async (req, res) => {
   res.json({ success: true, data: sanitizeUser(user) })
 })
 
+app.get('/api/admin/users', authenticateAdmin, async (req, res) => {
+  try {
+    const users = await User.find({})
+      .select('username role nickname birthday totalCodeLines todayCodeLines catFood waterDrops plantStage lastSyncTime createdAt updatedAt')
+      .sort({ createdAt: -1 })
+
+    const data = users.map((user) => ({
+      username: user.username,
+      role: user.role || 'user',
+      isAdmin: user.role === 'admin',
+      nickname: user.nickname || '',
+      birthday: user.birthday || '',
+      totalCodeLines: user.totalCodeLines || 0,
+      todayCodeLines: user.todayCodeLines || 0,
+      catFood: user.catFood || 0,
+      waterDrops: user.waterDrops || 0,
+      plantStage: user.plantStage || 1,
+      lastSyncTime: user.lastSyncTime,
+      registeredAt: (user.createdAt || user._id.getTimestamp()).toISOString(),
+      updatedAt: user.updatedAt
+    }))
+
+    res.json({ success: true, data })
+  } catch (error) {
+    console.error('Fetch admin users failed:', error)
+    res.status(500).json({ success: false, message: 'Server error.' })
+  }
+})
+
 app.post('/api/term-stats', authenticateToken, async (req, res) => {
   try {
     const date = String(req.body.date || '').trim()
     const solarTerm = String(req.body.solarTerm || '').trim()
     const codeLines = Number(req.body.codeLines || 0)
-    const commitCount = Number(req.body.commitCount || 0)
-    const errorCount = Number(req.body.errorCount || 0)
+    const activeFileCount = readNonNegativeMetric(req.body.activeFileCount, req.body.commitCount)
+    const fixCount = readNonNegativeMetric(req.body.fixCount, req.body.errorCount)
     const userId = req.auth.userId
 
     if (!date || !solarTerm) {
       return res.status(400).json({ success: false, message: 'date and solarTerm are required.' })
     }
 
-    if (![codeLines, commitCount, errorCount].every(isNonNegativeFiniteNumber)) {
+    if (![codeLines, activeFileCount, fixCount].every(isNonNegativeFiniteNumber)) {
       return res.status(400).json({ success: false, message: 'Term stats values must be non-negative numbers.' })
     }
 
@@ -396,8 +460,10 @@ app.post('/api/term-stats', authenticateToken, async (req, res) => {
       {
         $inc: {
           codeLines,
-          commitCount,
-          errorCount
+          activeFileCount,
+          fixCount,
+          commitCount: activeFileCount,
+          errorCount: fixCount
         }
       },
       { upsert: true, new: true, setDefaultsOnInsert: true }
@@ -422,12 +488,16 @@ app.get('/api/term-stats', authenticateToken, async (req, res) => {
     const stats = await TermDailyStat.find({ userId, solarTerm }).sort({ date: 1 })
 
     let totalCodeLines = 0
+    let totalActiveFileCount = 0
+    let totalFixCount = 0
     let totalCommitCount = 0
     let totalErrorCount = 0
     stats.forEach((stat) => {
       totalCodeLines += stat.codeLines || 0
-      totalCommitCount += stat.commitCount || 0
-      totalErrorCount += stat.errorCount || 0
+      totalActiveFileCount += stat.activeFileCount ?? stat.commitCount ?? 0
+      totalFixCount += stat.fixCount ?? stat.errorCount ?? 0
+      totalCommitCount += stat.commitCount ?? stat.activeFileCount ?? 0
+      totalErrorCount += stat.errorCount ?? stat.fixCount ?? 0
     })
 
     res.json({
@@ -436,6 +506,8 @@ app.get('/api/term-stats', authenticateToken, async (req, res) => {
         solarTerm,
         dailyStats: stats,
         totalCodeLines,
+        totalActiveFileCount,
+        totalFixCount,
         totalCommitCount,
         totalErrorCount
       }
@@ -491,19 +563,23 @@ app.post('/api/reports', authenticateToken, async (req, res) => {
     const stats = await TermDailyStat.find({ userId, solarTerm }).sort({ date: 1 })
 
     let totalCodeLines = 0
+    let totalActiveFileCount = 0
+    let totalFixCount = 0
     let totalCommitCount = 0
     let totalErrorCount = 0
     stats.forEach((stat) => {
       totalCodeLines += stat.codeLines || 0
-      totalCommitCount += stat.commitCount || 0
-      totalErrorCount += stat.errorCount || 0
+      totalActiveFileCount += stat.activeFileCount ?? stat.commitCount ?? 0
+      totalFixCount += stat.fixCount ?? stat.errorCount ?? 0
+      totalCommitCount += stat.commitCount ?? stat.activeFileCount ?? 0
+      totalErrorCount += stat.errorCount ?? stat.fixCount ?? 0
     })
 
     const report = await TermReport.findOneAndUpdate(
       { userId, solarTerm },
       {
         $set: {
-          periodStart, periodEnd, totalCodeLines, totalCommitCount, totalErrorCount,
+          periodStart, periodEnd, totalCodeLines, totalActiveFileCount, totalFixCount, totalCommitCount, totalErrorCount,
           plantStage, harvestStage, harvestTier, harvestItemName, dailyStats: stats, summary
         }
       },
@@ -590,9 +666,6 @@ async function migrateOldUsers() {
     console.error('迁移失败:', error)
   }
 }
-// 运行迁移脚本
-migrateOldUsers()
-
 app.listen(PORT, () => {
   console.log(`CS Valley server listening at http://localhost:${PORT}`)
 })

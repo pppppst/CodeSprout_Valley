@@ -123,13 +123,13 @@ describe('cloudApi helpers', () => {
     mockFetchResponse({ jsonData: { success: true } })
 
     await updateUserProfile('token-1', { nickname: 'cat' })
-    await uploadTermDailyStat('token-1', { date: '2024-01-01', solarTerm: 'test' })
+    await uploadTermDailyStat('token-1', { date: '2024-01-01', solarTerm: 'test', activeFileCount: 2, fixCount: 1 })
     await saveTermReport('token-1', { solarTerm: 'test', summary: 'ok' })
 
     expect(globalThis.fetch).toHaveBeenCalledTimes(3)
     const bodies = globalThis.fetch.mock.calls.map(([, options]) => options.body)
     expect(bodies).toContain(JSON.stringify({ nickname: 'cat' }))
-    expect(bodies).toContain(JSON.stringify({ date: '2024-01-01', solarTerm: 'test' }))
+    expect(bodies).toContain(JSON.stringify({ date: '2024-01-01', solarTerm: 'test', activeFileCount: 2, fixCount: 1 }))
     expect(bodies).toContain(JSON.stringify({ solarTerm: 'test', summary: 'ok' }))
   })
 })
