@@ -15,8 +15,8 @@ describe('bubbleMessages', () => {
   })
 
   it('includes a few well-known messages', () => {
-    expect(bubbleMessages).toContain('🐛 捉到一个bug！')
-    expect(bubbleMessages).toContain('✅ 测试全部通过！')
-    expect(bubbleMessages).toContain('🚀 部署到生产环境！')
+    expect(bubbleMessages).toContain('🍃 报错只是善意的提醒，不是对你的否定')
+    expect(bubbleMessages).toContain('✨ 保持手感，你敲下的每一个字符都算数')
+    expect(bubbleMessages).toContain('🚀 去创造吧，用代码在这个数字世界里盖楼')
   })
 })
