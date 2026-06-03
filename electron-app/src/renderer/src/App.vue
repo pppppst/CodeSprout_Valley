@@ -517,7 +517,6 @@ const CODE_LINES_PER_REWARD = 50
 const RESOURCE_PER_REWARD = 20
 const WATER_COST = 20
 const MAX_WATERINGS_PER_TERM = 120
-const MAX_WATER_REWARDED_LINES = MAX_WATERINGS_PER_TERM * CODE_LINES_PER_REWARD
 
 const plantWaterByTerm = ref({})
 const suppressResourceRewards = ref(false)
@@ -1734,6 +1733,7 @@ const currentPlant = computed(() => {
 // 7. 沙盘模式 (Time Machine)
 // ==========================================
 const SANDBOX_CODE_LINES = 6000
+const SANDBOX_RESOURCE_AMOUNT = 3000
 const mockDateString = ref(null)
 const isTimeMachineOpen = ref(false)
 const tmYear = ref('')
@@ -1772,9 +1772,45 @@ function validateTimeMachineDate() {
   const y = Number(tmYear.value), m = Number(tmMonth.value), d = Number(tmDay.value)
   if (!Number.isInteger(y) || y <= 0) { timeMachineError.value = '年份不合理'; return null }
   if (!Number.isInteger(m) || m < 1 || m > 12) { timeMachineError.value = '月份不合理'; return null }
-  const maxDays = SolarUtil.getDaysOfMonth(y, m)
+  let maxDays = 0
+  try {
+    maxDays = SolarUtil.getDaysOfMonth(y, m)
+  } catch {
+    maxDays = new Date(y, m, 0).getDate()
+  }
   if (!Number.isInteger(d) || d < 1 || d > maxDays) { timeMachineError.value = `日期不合理`; return null }
   return { y, m, d, date: makeLocalDate(y, m, d) }
+}
+
+function getTimeMachineFailureMessage(error) {
+  return `沙盘操作失败：${error?.message || '请检查日期和结算档位'}`
+}
+
+function getSandboxTermContext(date) {
+  const termName = getSolarTermNameForDate(date)
+  const termKey = solarTermMap[termName] || getTermPinyinForDate(date) || DEFAULT_PLANT_TERM
+  const safeTerm = solarTermEntries.find((entry) => entry.key === termKey)
+  return {
+    termName: termName || safeTerm?.name || '当前节气',
+    termKey: safeTerm?.key || DEFAULT_PLANT_TERM
+  }
+}
+
+function applySandboxDemoState(parsed, termKey, stage) {
+  mockDateString.value = `${parsed.y}-${pad2(parsed.m)}-${pad2(parsed.d)}`
+  suppressResourceRewards.value = true
+  codeLines.value = SANDBOX_CODE_LINES
+  syncedCodeLines.value = SANDBOX_CODE_LINES
+  totalCodeLines.value = SANDBOX_CODE_LINES
+  nextTick(() => suppressResourceRewards.value = false)
+
+  foodStock.value = SANDBOX_RESOURCE_AMOUNT
+  waterStock.value = SANDBOX_RESOURCE_AMOUNT
+  feedCount.value = 0
+  waterCount.value = 0
+  todayActiveFiles.value = 0
+  todayFixes.value = 0
+  plantWaterByTerm.value = { [termKey]: getMinimumWateringsForPlantStage(stage) }
 }
 
 const isSandboxActive = computed(() => !!parseYmdString(mockDateString.value))
@@ -1788,6 +1824,8 @@ function captureCurrentState() {
   return {
     mockDateString: mockDateString.value,
     codeLines: codeLines.value,
+    syncedCodeLines: syncedCodeLines.value,
+    totalCodeLines: totalCodeLines.value,
     catExp: catExp.value,
     todayActiveFiles: todayActiveFiles.value,
     todayFixes: todayFixes.value,
@@ -1795,7 +1833,6 @@ function captureCurrentState() {
     waterCount: waterCount.value,
     foodStock: foodStock.value,
     waterStock: waterStock.value,
-    highestRewardedThreshold: highestRewardedThreshold.value,
     plantWaterByTerm: { ...plantWaterByTerm.value },
     harvestRecords: { ...harvestRecords.value },
     reportRecords: { ...reportRecords.value },
@@ -1826,8 +1863,9 @@ function restoreSnapshot(snapshot) {
   selectedArchiveTermKey.value = ''
   isArchiveOpen.value = false
   suppressResourceRewards.value = true
-  codeLines.value = snapshot.codeLines
-  highestRewardedThreshold.value = snapshot.highestRewardedThreshold
+  codeLines.value = Number(snapshot.codeLines || 0)
+  syncedCodeLines.value = Number(snapshot.syncedCodeLines || 0)
+  totalCodeLines.value = Number(snapshot.totalCodeLines || 0)
   nextTick(() => suppressResourceRewards.value = false)
 }
 
@@ -1852,31 +1890,24 @@ function closeTimeMachine() {
 function applyTimeMachine() {
   if (!isAdmin.value) return
 
-  const parsed = validateTimeMachineDate()
-  if (!parsed) return
+  try {
+    const parsed = validateTimeMachineDate()
+    if (!parsed) return
 
-  if (!sandboxSnapshot.value) sandboxSnapshot.value = captureCurrentState()
-  
-  const sandboxDate = parsed.date
-  mockDateString.value = `${parsed.y}-${pad2(parsed.m)}-${pad2(parsed.d)}`
-  
-  const termKey = getTermPinyinForDate(sandboxDate)
-  suppressResourceRewards.value = true
-  codeLines.value = SANDBOX_CODE_LINES
-  highestRewardedThreshold.value = Math.max(0, Math.floor(SANDBOX_CODE_LINES / CODE_LINES_PER_REWARD))
-  nextTick(() => suppressResourceRewards.value = false)
-  
-  foodStock.value = highestRewardedThreshold.value * RESOURCE_PER_REWARD
-  waterStock.value = Math.min(highestRewardedThreshold.value, Math.floor(MAX_WATER_REWARDED_LINES / CODE_LINES_PER_REWARD)) * RESOURCE_PER_REWARD
-  feedCount.value = 0
-  waterCount.value = 0
-  todayActiveFiles.value = 0
-  todayFixes.value = 0
-  plantWaterByTerm.value = { [termKey]: getMinimumWateringsForPlantStage(tmSettlementStage.value) }
-  isTimeMachineOpen.value = false
-  timeMachineError.value = ''
-  message.value = `⏳ 沙盘生效！前往 ${mockDateString.value}`
-  resetCatState(3000)
+    if (!sandboxSnapshot.value) sandboxSnapshot.value = captureCurrentState()
+
+    const stage = Math.max(1, Math.min(4, Number(tmSettlementStage.value) || 1))
+    const { termKey } = getSandboxTermContext(parsed.date)
+    applySandboxDemoState(parsed, termKey, stage)
+
+    isTimeMachineOpen.value = false
+    timeMachineError.value = ''
+    message.value = `⏳ 沙盘生效！前往 ${mockDateString.value}`
+    resetCatState(3000)
+  } catch (error) {
+    console.error('Apply time machine failed:', error)
+    timeMachineError.value = getTimeMachineFailureMessage(error)
+  }
 }
 
 function buildHarvestRecord(termName, termKey, stage) {
@@ -1915,59 +1946,73 @@ function saveReportRecord(record) {
 function simulateTermSettlement() {
   if (!isAdmin.value) return
 
-  const parsed = validateTimeMachineDate()
-  if (!parsed) return
-  if (!sandboxSnapshot.value) sandboxSnapshot.value = captureCurrentState()
+  try {
+    const parsed = validateTimeMachineDate()
+    if (!parsed) return
+    if (!sandboxSnapshot.value) sandboxSnapshot.value = captureCurrentState()
 
-  const settledDate = parsed.date
-  const settledTermName = getSolarTermNameForDate(settledDate) || '当前节气'
-  const settledTermKey = solarTermMap[settledTermName] || getTermPinyinForDate(settledDate)
-  const stage = Math.max(1, Math.min(4, Number(tmSettlementStage.value) || 1))
-  const waterings = getMinimumWateringsForPlantStage(stage)
-  const totalActions = feedCount.value + waterings
-  const record = saveHarvestRecord(buildHarvestRecord(settledTermName, settledTermKey, stage))
-  const nextTermDate = getNextTermDate(settledDate, settledTermName)
-  const nextTermKey = getTermPinyinForDate(nextTermDate)
+    const settledDate = parsed.date
+    const { termName: settledTermName, termKey: settledTermKey } = getSandboxTermContext(settledDate)
+    const stage = Math.max(1, Math.min(4, Number(tmSettlementStage.value) || 1))
+    applySandboxDemoState(parsed, settledTermKey, stage)
 
-  latestHarvestTermKey.value = settledTermKey
-  latestReportTermKey.value = settledTermKey
-  hasNewHarvest.value = true
-  hasNewReport.value = true
-  const reportRecord = {
-    termName: settledTermName,
-    termKey: settledTermKey,
-    title: `${settledTermName}结算周报`,
-    date: `${settledDate.getFullYear()}年${pad2(settledDate.getMonth() + 1)}月${pad2(settledDate.getDate())}日`,
-    owner: loggedInUser.value || '本地用户',
-    totalCodeLines: totalCodeLines.value,
-    activeFileCount: todayActiveFiles.value,
-    fixCount: todayFixes.value,
-    fixRate: formatFixRate(todayActiveFiles.value, todayFixes.value),
-    totalActions,
-    plantStage: stage,
-    syncText: '沙盘模拟结算，不会同步云端',
-    summary: `${settledTermName}已结算，植物成长到第 ${stage} 阶段，图鉴收获：${record.itemName}。`
+    const waterings = getMinimumWateringsForPlantStage(stage)
+    const totalActions = feedCount.value + waterings
+    const record = saveHarvestRecord(buildHarvestRecord(settledTermName, settledTermKey, stage))
+    const nextTermDate = getNextTermDate(settledDate, settledTermName)
+    const { termKey: nextTermKey } = getSandboxTermContext(nextTermDate)
+
+    latestHarvestTermKey.value = settledTermKey
+    latestReportTermKey.value = settledTermKey
+    selectedArchiveTermKey.value = settledTermKey
+    hasNewHarvest.value = true
+    hasNewReport.value = true
+    const reportRecord = {
+      termName: settledTermName,
+      termKey: settledTermKey,
+      title: `${settledTermName}结算周报`,
+      date: `${settledDate.getFullYear()}年${pad2(settledDate.getMonth() + 1)}月${pad2(settledDate.getDate())}日`,
+      owner: loggedInUser.value || '本地用户',
+      totalCodeLines: totalCodeLines.value,
+      activeFileCount: todayActiveFiles.value,
+      fixCount: todayFixes.value,
+      fixRate: formatFixRate(todayActiveFiles.value, todayFixes.value),
+      totalActions,
+      plantStage: stage,
+      syncText: '沙盘模拟结算，不会同步云端',
+      summary: `${settledTermName}已结算，植物成长到第 ${stage} 阶段，图鉴收获：${record.itemName}。`
+    }
+    saveReportRecord(reportRecord)
+
+    mockDateString.value = `${nextTermDate.getFullYear()}-${pad2(nextTermDate.getMonth() + 1)}-${pad2(nextTermDate.getDate())}`
+    plantWaterByTerm.value = { [nextTermKey]: 0 }
+    waterCount.value = 0
+    isTimeMachineOpen.value = false
+    isArchiveOpen.value = false
+    timeMachineError.value = ''
+    message.value = `✨ ${settledTermName}结算完成，节气档案有新内容！`
+    resetCatState(3000)
+  } catch (error) {
+    console.error('Simulate term settlement failed:', error)
+    timeMachineError.value = getTimeMachineFailureMessage(error)
   }
-  saveReportRecord(reportRecord)
-
-  mockDateString.value = `${nextTermDate.getFullYear()}-${pad2(nextTermDate.getMonth() + 1)}-${pad2(nextTermDate.getDate())}`
-  plantWaterByTerm.value = { [nextTermKey]: 0 }
-  waterCount.value = 0
-  isTimeMachineOpen.value = false
-  isArchiveOpen.value = false
-  message.value = `✨ ${settledTermName}结算完成，节气档案有新内容！`
-  resetCatState(3000)
 }
 
 function exitTimeMachine() {
   if (!isAdmin.value) return
 
-  restoreSnapshot(sandboxSnapshot.value)
-  sandboxSnapshot.value = null
-  mockDateString.value = null
-  isTimeMachineOpen.value = false
-  message.value = '⏰ 退出沙盘，恢复现实时间！'
-  resetCatState(3000)
+  try {
+    restoreSnapshot(sandboxSnapshot.value)
+    sandboxSnapshot.value = null
+    mockDateString.value = null
+    isTimeMachineOpen.value = false
+    timeMachineError.value = ''
+    message.value = '⏰ 退出沙盘，恢复现实时间！'
+    resetCatState(3000)
+  } catch (error) {
+    console.error('Exit time machine failed:', error)
+    timeMachineError.value = getTimeMachineFailureMessage(error)
+  }
 }
 
 function getTermPinyinForDate(date) {
