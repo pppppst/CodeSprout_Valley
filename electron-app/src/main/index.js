@@ -35,6 +35,27 @@ ipcMain.handle('get-window-position', () => {
   return { x: 0, y: 0 }
 })
 
+// ============ 悬浮窗鼠标穿透控制 ============
+/** 猫咪在悬浮窗中的近似位置（居中 170×170px + 投影边距） */
+const CAT_HIT_AREA = { x: 65, y: 85, width: 220, height: 230 }
+
+ipcMain.on('floating:disable-ignore-mouse', () => {
+  if (floatingWindow && !floatingWindow.isDestroyed()) {
+    // 拖拽开始：清空窗口形状（整个窗口可点击），禁用穿透，防止 alpha 产生脏数据
+    floatingWindow.setShape([])
+    floatingWindow.setIgnoreMouseEvents(false)
+  }
+})
+
+ipcMain.on('floating:enable-ignore-mouse', () => {
+  if (floatingWindow && !floatingWindow.isDestroyed()) {
+    // 拖拽结束：用 setShape 恢复猫咪区域为窗口唯一可点击区域
+    // setShape 使用 Win32 SetWindowRgn，不依赖 alpha 通道，无脏数据累积问题
+    floatingWindow.setShape([CAT_HIT_AREA])
+    floatingWindow.setIgnoreMouseEvents(false)
+  }
+})
+
 function broadcastPluginActivity(payload) {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('activity:update', payload)
@@ -179,6 +200,15 @@ function createFloatingWindow() {
   floatingWindow.webContents.on('context-menu', (event) => {
     event.preventDefault()
     floatMenu.popup()
+  })
+
+  // 内容加载后设置窗口形状（仅猫咪区域可点击），不依赖 alpha 通道，无脏数据问题
+  floatingWindow.webContents.on('did-finish-load', () => {
+    setImmediate(() => {
+      if (floatingWindow && !floatingWindow.isDestroyed()) {
+        floatingWindow.setShape([CAT_HIT_AREA])
+      }
+    })
   })
 
 
