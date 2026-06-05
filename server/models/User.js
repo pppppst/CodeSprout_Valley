@@ -13,7 +13,8 @@ const userSchema = new mongoose.Schema({
   plantStage: { type: Number, default: 1 },
   lastSyncTime: { type: Date, default: Date.now },
   lastCodeDate: { type: String, default: '' },   // 记录最后同步代码的日期(YYYY-MM-DD)，用于每日代码行清零
-  lastTermReset: { type: String, default: '' }    // 记录当前节气名，用于按节气清零猫粮/水滴
+  lastTermReset: { type: String, default: '' },   // 记录当前节气名，用于按节气清零猫粮/水滴
+  pastTermArchive: { type: Object, default: null } // 🌟 新增：上个节气的快照存档
 }, {
   timestamps: true //  新增：开启自动时间戳
 })
