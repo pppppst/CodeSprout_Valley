@@ -220,6 +220,12 @@ function applyCloudSave(save) {
   foodStock.value = Number(save.catFood || 0)
   waterStock.value = Number(save.waterDrops || 0)
 
+  // 🌟 新增：接住后端返回的喂食/浇水次数、活跃文件、修复次数
+  feedCount.value = Number(save.todayFeedCount || 0)
+  waterCount.value = Number(save.todayWaterCount || 0)
+  todayActiveFiles.value = Number(save.todayActiveFiles || 0)
+  todayFixes.value = Number(save.todayFixCount || 0)
+
   // 读取云端的植物状态，强制覆盖前端默认值（认后端为爹）。
   // 注意：因为 currentPlantStage 是一个根据浇水次数 (plantWaterByTerm) 计算得出的 computed 属性，
   // 我们需要反向计算出对应的浇水次数并覆盖当前节气的状态。
@@ -331,6 +337,8 @@ async function processAutoSync() {
 
   const hasPendingStats = pendingSync.value.codeLines > 0 || pendingSync.value.activeFileCount > 0 || pendingSync.value.fixCount > 0
   const localUnsyncedLines = Math.max(0, Number(pendingSync.value.archiveCodeLines || 0))
+  const localUnsyncedActiveFiles = Math.max(0, Number(pendingSync.value.activeFileCount || 0)) // 🌟 暂存增量
+  const localUnsyncedFixes = Math.max(0, Number(pendingSync.value.fixCount || 0)) // 🌟 暂存增量
   const leftoverLines = Math.max(0, Number(pendingSync.value.leftoverLines || 0))
 
   let newLeftoverLines = leftoverLines
@@ -366,9 +374,13 @@ async function processAutoSync() {
     // 发送最新的余额给后端（哪怕没敲代码 addedLines=0）
     const archivePayload = {
       addedLines: localUnsyncedLines,
+      addedActiveFiles: localUnsyncedActiveFiles, // 🌟 活跃文件增量
+      addedFixes: localUnsyncedFixes, // 🌟 修复次数增量
       catFood: foodStock.value,
       waterDrops: waterStock.value,
-      plantStage: currentPlantStage.value
+      plantStage: currentPlantStage.value,
+      todayFeedCount: feedCount.value, // 🌟 今日喂食次数
+      todayWaterCount: waterCount.value // 🌟 今日浇水次数
     }
     const syncResult = await syncCloudSave(cloudToken.value, archivePayload)
 
@@ -935,6 +947,16 @@ async function openArchive() {
               displayPlantStage = pastTermArchive.value.plantStage
             }
 
+            // 🌟 活跃文件/修复次数快照回退
+            let displayActiveFiles = getReportActiveFileCount(report)
+            let displayFixes = getReportFixCount(report)
+            if (!displayActiveFiles && isArchiveTerm) {
+              displayActiveFiles = pastTermArchive.value.totalActiveFiles || 0
+            }
+            if (!displayFixes && isArchiveTerm) {
+              displayFixes = pastTermArchive.value.totalFixCount || 0
+            }
+
             cloudReports[termKey] = {
               termName: report.solarTerm,
               termKey: termKey,
@@ -942,9 +964,9 @@ async function openArchive() {
               date: `${formatReportDate(report.createdAt) || report.periodStart} 生成`,
               owner: loggedInUser.value || '本地种植者',
               totalCodeLines: displayCodeLines, // 👈 使用修复后的数值（含快照回退）
-              activeFileCount: getReportActiveFileCount(report),
-              fixCount: getReportFixCount(report),
-              fixRate: formatFixRate(getReportActiveFileCount(report), getReportFixCount(report)),
+              activeFileCount: displayActiveFiles, // 👈 含快照回退
+              fixCount: displayFixes, // 👈 含快照回退
+              fixRate: formatFixRate(displayActiveFiles, displayFixes),
               totalActions: '已归档',
               plantStage: displayPlantStage || '已归档', // 👈 快照阶段优先
               syncText: '☁️ 云端永久快照',
@@ -1024,12 +1046,12 @@ async function generateAndSaveCloudReport() {
     if (!statsRes.success) throw new Error(statsRes.message)
 
     const data = statsRes.data
-    const activeFileCount = getReportActiveFileCount(data)
-    const fixCount = getReportFixCount(data)
-    const fixRate = formatFixRate(activeFileCount, fixCount)
-    // 🌟 时空回溯：快照里的代码行数比 reset 后的 0 更准确
+    // 🌟 时空回溯：快照里的数据比 reset 后的 0 更准确
     const displayCodeLines = isTimeTravel ? (pastTermArchive.value.totalCodeLines || data.totalCodeLines) : data.totalCodeLines
-    const summaryText = `${SOLAR_TERM_REPORT_YEAR} 年${termName}节气已结算。云端记录显示：本节气期间累计编写代码 ${displayCodeLines} 行，活跃文件 ${activeFileCount} 个，修复次数 ${fixCount} 次，修复率 ${fixRate}。`
+    const displayActiveFiles = isTimeTravel ? (pastTermArchive.value.totalActiveFiles || getReportActiveFileCount(data)) : getReportActiveFileCount(data)
+    const displayFixCount = isTimeTravel ? (pastTermArchive.value.totalFixCount || getReportFixCount(data)) : getReportFixCount(data)
+    const displayFixRate = formatFixRate(displayActiveFiles, displayFixCount)
+    const summaryText = `${SOLAR_TERM_REPORT_YEAR} 年${termName}节气已结算。云端记录显示：本节气期间累计编写代码 ${displayCodeLines} 行，活跃文件 ${displayActiveFiles} 个，修复次数 ${displayFixCount} 次，修复率 ${displayFixRate}。`
 
     // 🌟 时空回溯：快照里的植物阶段 > 本地 harvest 记录 > 浇水推算
     const archiveStage = isTimeTravel ? pastTermArchive.value.plantStage : undefined
@@ -1058,9 +1080,9 @@ async function generateAndSaveCloudReport() {
       date: `${getTodayString()} 生成`,
       owner: loggedInUser.value || '本地种植者',
       totalCodeLines: displayCodeLines, // 🌟 使用快照/API统一后的真实行数
-      activeFileCount: getReportActiveFileCount(savedReport) || activeFileCount,
-      fixCount: getReportFixCount(savedReport) || fixCount,
-      fixRate: formatFixRate(getReportActiveFileCount(savedReport) || activeFileCount, getReportFixCount(savedReport) || fixCount),
+      activeFileCount: getReportActiveFileCount(savedReport) || displayActiveFiles, // 🌟 快照修正后的活跃文件数
+      fixCount: getReportFixCount(savedReport) || displayFixCount, // 🌟 快照修正后的修复次数
+      fixRate: formatFixRate(getReportActiveFileCount(savedReport) || displayActiveFiles, getReportFixCount(savedReport) || displayFixCount),
       totalActions: '已归档',
       plantStage: stage,
       syncText: '☁️ 云端永久快照',

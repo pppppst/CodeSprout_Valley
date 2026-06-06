@@ -146,10 +146,20 @@ function sanitizeUser(user) {
   // 🌟 核心解耦：今日清今日的，节气清节气的！
   const displayTodayLines = (user.lastCodeDate !== todayStr) ? 0 : (user.todayCodeLines || 0)
   const displayTotalLines = (user.lastTermReset !== currentTerm) ? 0 : (user.totalCodeLines || 0)
-  
+
   const displayCatFood = (user.lastTermReset !== currentTerm) ? 0 : (user.catFood || 0)
   const displayWaterDrops = (user.lastTermReset !== currentTerm) ? 0 : (user.waterDrops || 0)
   const displayPlantStage = (user.lastTermReset !== currentTerm) ? 1 : (user.plantStage || 1)
+
+  // 🌟 新增：每日清零字段
+  const displayTodayActiveFiles = (user.lastCodeDate !== todayStr) ? 0 : (user.todayActiveFiles || 0)
+  const displayTodayFixCount = (user.lastCodeDate !== todayStr) ? 0 : (user.todayFixCount || 0)
+  const displayTodayFeedCount = (user.lastCodeDate !== todayStr) ? 0 : (user.todayFeedCount || 0)
+  const displayTodayWaterCount = (user.lastCodeDate !== todayStr) ? 0 : (user.todayWaterCount || 0)
+
+  // 🌟 新增：节气清零字段
+  const displayTotalActiveFiles = (user.lastTermReset !== currentTerm) ? 0 : (user.totalActiveFiles || 0)
+  const displayTotalFixCount = (user.lastTermReset !== currentTerm) ? 0 : (user.totalFixCount || 0)
 
   return {
     username: user.username,
@@ -159,6 +169,12 @@ function sanitizeUser(user) {
     birthday: user.birthday || '',
     totalCodeLines: displayTotalLines, // 这个继续给你们的【节气周报】用
     todayCodeLines: displayTodayLines, // 🌟 这个给前端的【实时主界面】用！
+    todayActiveFiles: displayTodayActiveFiles, // 🌟 今日活跃文件
+    todayFixCount: displayTodayFixCount, // 🌟 今日修复次数
+    todayFeedCount: displayTodayFeedCount, // 🌟 今日喂食次数
+    todayWaterCount: displayTodayWaterCount, // 🌟 今日浇水次数
+    totalActiveFiles: displayTotalActiveFiles, // 🌟 节气活跃文件总数
+    totalFixCount: displayTotalFixCount, // 🌟 节气修复总次数
     catFood: displayCatFood,
     waterDrops: displayWaterDrops,
     plantStage: displayPlantStage,
@@ -298,14 +314,18 @@ app.post('/api/login', async (req, res) => {
 app.post('/api/sync', authenticateToken, async (req, res) => {
   try {
     const addedLines = Number(req.body.addedLines || 0);
+    const addedActiveFiles = Number(req.body.addedActiveFiles || 0); // 🌟 新增
+    const addedFixes = Number(req.body.addedFixes || 0); // 🌟 新增
     let catFood = Number(req.body.catFood || 0);
     let waterDrops = Number(req.body.waterDrops || 0);
     let plantStage = Number(req.body.plantStage || 1);
+    const todayFeedCount = Number(req.body.todayFeedCount || 0); // 🌟 新增
+    const todayWaterCount = Number(req.body.todayWaterCount || 0); // 🌟 新增
 
     if (!Number.isFinite(addedLines) || addedLines < 0 || addedLines > 5000) {
       return res.status(400).json({ success: false, message: 'Invalid addedLines value.' });
     }
-    if (![catFood, waterDrops, plantStage].every(Number.isFinite)) {
+    if (![catFood, waterDrops, plantStage, addedActiveFiles, addedFixes, todayFeedCount, todayWaterCount].every(Number.isFinite)) {
       return res.status(400).json({ success: false, message: 'Invalid sync payload.' });
     }
 
@@ -318,15 +338,23 @@ app.post('/api/sync', authenticateToken, async (req, res) => {
     const todayStr = getBeijingDateStr(now);
     const currentTerm = getSolarTermByTime(now);
 
-    // 🌟 轨道 1：【每日清零逻辑】只针对 todayCodeLines
+    // 🌟 轨道 1：【每日清零逻辑】针对 today 系字段
     if (user.lastCodeDate !== todayStr) {
-      user.todayCodeLines = addedLines; // 跨天，今天从新增的行数重新算
+      user.todayCodeLines = addedLines;
+      user.todayActiveFiles = addedActiveFiles; // 🌟 跨天重置
+      user.todayFixCount = addedFixes; // 🌟 跨天重置
+      user.todayFeedCount = todayFeedCount; // 🌟 跨天重置
+      user.todayWaterCount = todayWaterCount; // 🌟 跨天重置
       user.lastCodeDate = todayStr;
     } else {
       user.todayCodeLines = (user.todayCodeLines || 0) + addedLines;
+      user.todayActiveFiles = (user.todayActiveFiles || 0) + addedActiveFiles; // 🌟 累加
+      user.todayFixCount = (user.todayFixCount || 0) + addedFixes; // 🌟 累加
+      if (todayFeedCount !== undefined) user.todayFeedCount = todayFeedCount; // 🌟 用最新值覆盖
+      if (todayWaterCount !== undefined) user.todayWaterCount = todayWaterCount; // 🌟 用最新值覆盖
     }
 
-    // 🌟 轨道 2：【节气清零逻辑】针对 totalCodeLines 和 猫粮等
+    // 🌟 轨道 2：【节气清零逻辑】针对 total 系字段 + 猫粮等
     if (user.lastTermReset !== currentTerm) {
 
       // ⚠️ 核心修复：自动快照！在清零前，把上个节气的所有心血封存！
@@ -334,19 +362,25 @@ app.post('/api/sync', authenticateToken, async (req, res) => {
         user.pastTermArchive = {
           solarTerm: user.lastTermReset,
           totalCodeLines: user.totalCodeLines || 0,
+          totalActiveFiles: user.totalActiveFiles || 0, // 🌟 封存上赛季活跃文件
+          totalFixCount: user.totalFixCount || 0, // 🌟 封存上赛季修复次数
           plantStage: user.plantStage || 1,
           catFood: user.catFood || 0,
           waterDrops: user.waterDrops || 0
         };
       }
 
-      user.totalCodeLines = addedLines; // 跨节气了，节气总数重新算
+      user.totalCodeLines = addedLines;
+      user.totalActiveFiles = addedActiveFiles; // 🌟 跨节气重置
+      user.totalFixCount = addedFixes; // 🌟 跨节气重置
       user.catFood = 0;
       user.waterDrops = 0;
       user.plantStage = 1;
       user.lastTermReset = currentTerm;
     } else {
-      user.totalCodeLines = (user.totalCodeLines || 0) + addedLines; // 没跨节气，总数疯狂累加！
+      user.totalCodeLines = (user.totalCodeLines || 0) + addedLines;
+      user.totalActiveFiles = (user.totalActiveFiles || 0) + addedActiveFiles; // 🌟 累加
+      user.totalFixCount = (user.totalFixCount || 0) + addedFixes; // 🌟 累加
       user.catFood = Math.max(0, catFood);
       user.waterDrops = Math.max(0, waterDrops);
       user.plantStage = Math.max(1, Math.min(4, plantStage));
@@ -355,7 +389,7 @@ app.post('/api/sync', authenticateToken, async (req, res) => {
     user.lastSyncTime = now;
     await user.save();
 
-    console.log(`[sync] ${user.username}: lines=${user.totalCodeLines}, term=${currentTerm}`);
+    console.log(`[sync] ${user.username}: lines=${user.totalCodeLines}, files=${user.totalActiveFiles}, fixes=${user.totalFixCount}, term=${currentTerm}`);
     res.json({ success: true, message: 'Cloud sync completed.', data: sanitizeUser(user) });
   } catch (error) {
     console.error('Sync failed:', error);
@@ -419,7 +453,7 @@ app.get('/api/user/:username', authenticateToken, async (req, res) => {
 app.get('/api/admin/users', authenticateAdmin, async (req, res) => {
   try {
     const users = await User.find({})
-      .select('username role nickname birthday totalCodeLines todayCodeLines catFood waterDrops plantStage lastSyncTime createdAt updatedAt')
+      .select('username role nickname birthday totalCodeLines todayCodeLines todayActiveFiles todayFixCount todayFeedCount todayWaterCount totalActiveFiles totalFixCount catFood waterDrops plantStage lastSyncTime createdAt updatedAt')
       .sort({ createdAt: -1 })
 
     const data = users.map((user) => ({
@@ -430,6 +464,12 @@ app.get('/api/admin/users', authenticateAdmin, async (req, res) => {
       birthday: user.birthday || '',
       totalCodeLines: user.totalCodeLines || 0,
       todayCodeLines: user.todayCodeLines || 0,
+      todayActiveFiles: user.todayActiveFiles || 0,
+      todayFixCount: user.todayFixCount || 0,
+      todayFeedCount: user.todayFeedCount || 0,
+      todayWaterCount: user.todayWaterCount || 0,
+      totalActiveFiles: user.totalActiveFiles || 0,
+      totalFixCount: user.totalFixCount || 0,
       catFood: user.catFood || 0,
       waterDrops: user.waterDrops || 0,
       plantStage: user.plantStage || 1,
