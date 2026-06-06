@@ -236,6 +236,11 @@ function applyCloudSave(save) {
     lastSyncTime.value = new Date(save.lastSyncTime).toLocaleString()
     localStorage.setItem('codeSproutLastSyncTime', lastSyncTime.value)
   }
+
+  // 🌟 核心拦截：接住后端发来的遗产快照！
+  if (save.pastTermArchive) {
+    pastTermArchive.value = save.pastTermArchive
+  }
 }
 
 async function loadCloudSave() {
@@ -511,6 +516,7 @@ const isAdminUsersLoading = ref(false)
 const adminUsersError = ref('')
 const userNickname = ref('')
 const userBirthday = ref('')
+const pastTermArchive = ref(null) // 🌟 新增：上个节气的快照存档（防空洞）
 
 
 const CODE_LINES_PER_REWARD = 50
@@ -737,6 +743,13 @@ function getTodayString() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
+function formatReportDate(isoStr) {
+  if (!isoStr) return ''
+  const d = new Date(isoStr)
+  if (isNaN(d.getTime())) return ''
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
 const lastFedDate = ref(localStorage.getItem('cs_valley_last_fed_date') || '')
 
 // 监听基础状态与悬浮窗模式，自动调度对应的底层动画和计时器
@@ -910,18 +923,30 @@ async function openArchive() {
               displayCodeLines = parseInt(match[1], 10) // 把文案里的真实行数抠出来显示
             }
 
+            // 🌟 防空洞回退：如果后端报告代码量为0，尝试从快照恢复
+            const isArchiveTerm = pastTermArchive.value && pastTermArchive.value.solarTerm === report.solarTerm
+            if (!displayCodeLines && isArchiveTerm) {
+              displayCodeLines = pastTermArchive.value.totalCodeLines
+            }
+
+            // 🌟 植物阶段也优先从快照取
+            let displayPlantStage = report.harvestTier && Number.isFinite(Number(report.plantStage)) ? Number(report.plantStage) : undefined
+            if (!displayPlantStage && isArchiveTerm) {
+              displayPlantStage = pastTermArchive.value.plantStage
+            }
+
             cloudReports[termKey] = {
               termName: report.solarTerm,
               termKey: termKey,
               title: `${report.solarTerm}结算周报`,
-              date: `${report.periodStart} 生成`,
+              date: `${formatReportDate(report.createdAt) || report.periodStart} 生成`,
               owner: loggedInUser.value || '本地种植者',
-              totalCodeLines: displayCodeLines, // 👈 使用修复后的数值
+              totalCodeLines: displayCodeLines, // 👈 使用修复后的数值（含快照回退）
               activeFileCount: getReportActiveFileCount(report),
               fixCount: getReportFixCount(report),
               fixRate: formatFixRate(getReportActiveFileCount(report), getReportFixCount(report)),
               totalActions: '已归档',
-              plantStage: report.harvestTier && Number.isFinite(Number(report.plantStage)) ? Number(report.plantStage) : '已归档',
+              plantStage: displayPlantStage || '已归档', // 👈 快照阶段优先
               syncText: '☁️ 云端永久快照',
               summary: reportSummary
             }
@@ -983,6 +1008,15 @@ async function generateAndSaveCloudReport() {
     return
   }
 
+  // 🌟 核心分流逻辑：动用"防空洞"里的遗产
+  // 如果请求的节气恰好是快照里的节气，就用快照数据（后端清零前的封存）
+  const isTimeTravel = pastTermArchive.value && pastTermArchive.value.solarTerm === termName
+  if (isTimeTravel) {
+    console.log(`[周报生成] 触发时空回溯，使用 ${termName} 的历史快照！`)
+  } else {
+    console.log(`[周报生成] 使用当前实时数据生成 ${termName} 报告。`)
+  }
+
   message.value = `📊 正在向云端请求 ${termName} 的统计数据...`
 
   try {
@@ -993,9 +1027,13 @@ async function generateAndSaveCloudReport() {
     const activeFileCount = getReportActiveFileCount(data)
     const fixCount = getReportFixCount(data)
     const fixRate = formatFixRate(activeFileCount, fixCount)
-    const summaryText = `${SOLAR_TERM_REPORT_YEAR} 年${termName}节气已结算。云端记录显示：本节气期间累计编写代码 ${data.totalCodeLines} 行，活跃文件 ${activeFileCount} 个，修复次数 ${fixCount} 次，修复率 ${fixRate}。`
+    // 🌟 时空回溯：快照里的代码行数比 reset 后的 0 更准确
+    const displayCodeLines = isTimeTravel ? (pastTermArchive.value.totalCodeLines || data.totalCodeLines) : data.totalCodeLines
+    const summaryText = `${SOLAR_TERM_REPORT_YEAR} 年${termName}节气已结算。云端记录显示：本节气期间累计编写代码 ${displayCodeLines} 行，活跃文件 ${activeFileCount} 个，修复次数 ${fixCount} 次，修复率 ${fixRate}。`
 
-    const stage = selectedArchiveHarvestRecord.value?.stage || getPlantStageByWaterings(plantWaterByTerm.value[termKey] || 0)
+    // 🌟 时空回溯：快照里的植物阶段 > 本地 harvest 记录 > 浇水推算
+    const archiveStage = isTimeTravel ? pastTermArchive.value.plantStage : undefined
+    const stage = archiveStage || selectedArchiveHarvestRecord.value?.stage || getPlantStageByWaterings(plantWaterByTerm.value[termKey] || 0)
     const tier = getHarvestTierByStage(stage)
     const harvestStage = getHarvestStageByPlantStage(stage)
     const harvestItemName = getHarvestPlantName(termName, termKey)
@@ -1017,9 +1055,9 @@ async function generateAndSaveCloudReport() {
       termName,
       termKey,
       title: `${termName}结算周报`,
-      date: `${savedReport.periodStart || getTodayString()} 生成`,
+      date: `${getTodayString()} 生成`,
       owner: loggedInUser.value || '本地种植者',
-      totalCodeLines: savedReport.totalCodeLines ?? data.totalCodeLines,
+      totalCodeLines: displayCodeLines, // 🌟 使用快照/API统一后的真实行数
       activeFileCount: getReportActiveFileCount(savedReport) || activeFileCount,
       fixCount: getReportFixCount(savedReport) || fixCount,
       fixRate: formatFixRate(getReportActiveFileCount(savedReport) || activeFileCount, getReportFixCount(savedReport) || fixCount),
@@ -1967,20 +2005,22 @@ function simulateTermSettlement() {
     selectedArchiveTermKey.value = settledTermKey
     hasNewHarvest.value = true
     hasNewReport.value = true
+    const isSandboxTimeTravel = pastTermArchive.value && pastTermArchive.value.solarTerm === settledTermName
+    const sandboxDisplayLines = isSandboxTimeTravel ? (pastTermArchive.value.totalCodeLines || totalCodeLines.value) : totalCodeLines.value
     const reportRecord = {
       termName: settledTermName,
       termKey: settledTermKey,
       title: `${settledTermName}结算周报`,
       date: `${settledDate.getFullYear()}年${pad2(settledDate.getMonth() + 1)}月${pad2(settledDate.getDate())}日`,
       owner: loggedInUser.value || '本地用户',
-      totalCodeLines: totalCodeLines.value,
+      totalCodeLines: sandboxDisplayLines, // 🌟 优先使用快照数据
       activeFileCount: todayActiveFiles.value,
       fixCount: todayFixes.value,
       fixRate: formatFixRate(todayActiveFiles.value, todayFixes.value),
       totalActions,
-      plantStage: stage,
+      plantStage: isSandboxTimeTravel ? pastTermArchive.value.plantStage : stage, // 🌟 快照阶段优先
       syncText: '沙盘模拟结算，不会同步云端',
-      summary: `${settledTermName}已结算，植物成长到第 ${stage} 阶段，图鉴收获：${record.itemName}。`
+      summary: `${settledTermName}已结算，植物成长到第 ${isSandboxTimeTravel ? pastTermArchive.value.plantStage : stage} 阶段，图鉴收获：${record.itemName}。`
     }
     saveReportRecord(reportRecord)
 

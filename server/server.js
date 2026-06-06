@@ -163,7 +163,8 @@ function sanitizeUser(user) {
     waterDrops: displayWaterDrops,
     plantStage: displayPlantStage,
     lastSyncTime: user.lastSyncTime,
-    registeredAt: registrationDate.toISOString() 
+    registeredAt: registrationDate.toISOString(),
+    pastTermArchive: user.pastTermArchive || null // 🌟 把遗产暴露给前端周报用
   }
 }
 
@@ -327,6 +328,18 @@ app.post('/api/sync', authenticateToken, async (req, res) => {
 
     // 🌟 轨道 2：【节气清零逻辑】针对 totalCodeLines 和 猫粮等
     if (user.lastTermReset !== currentTerm) {
+
+      // ⚠️ 核心修复：自动快照！在清零前，把上个节气的所有心血封存！
+      if (user.lastTermReset) {
+        user.pastTermArchive = {
+          solarTerm: user.lastTermReset,
+          totalCodeLines: user.totalCodeLines || 0,
+          plantStage: user.plantStage || 1,
+          catFood: user.catFood || 0,
+          waterDrops: user.waterDrops || 0
+        };
+      }
+
       user.totalCodeLines = addedLines; // 跨节气了，节气总数重新算
       user.catFood = 0;
       user.waterDrops = 0;
