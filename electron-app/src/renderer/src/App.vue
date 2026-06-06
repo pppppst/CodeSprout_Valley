@@ -32,7 +32,7 @@ const PENDING_SYNC_STORAGE_PREFIX = 'codeSproutPendingSync'
 const LAST_SEEN_SOLAR_TERM_STORAGE_PREFIX = 'codeSproutLastSeenSolarTerm'
 const SETTLED_SOLAR_TERMS_STORAGE_PREFIX = 'codeSproutSettledSolarTerms2026'
 const SOLAR_TERM_REPORT_YEAR = 2026
-const AUTO_SYNC_INTERVAL_MS = 30000
+const AUTO_SYNC_INTERVAL_MS = 5000
 
 function normalizePendingSync(value) {
   const codeLines = Math.max(0, Number(value?.codeLines || 0))
