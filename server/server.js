@@ -146,10 +146,20 @@ function sanitizeUser(user) {
   // 🌟 核心解耦：今日清今日的，节气清节气的！
   const displayTodayLines = (user.lastCodeDate !== todayStr) ? 0 : (user.todayCodeLines || 0)
   const displayTotalLines = (user.lastTermReset !== currentTerm) ? 0 : (user.totalCodeLines || 0)
-  
+
   const displayCatFood = (user.lastTermReset !== currentTerm) ? 0 : (user.catFood || 0)
   const displayWaterDrops = (user.lastTermReset !== currentTerm) ? 0 : (user.waterDrops || 0)
   const displayPlantStage = (user.lastTermReset !== currentTerm) ? 1 : (user.plantStage || 1)
+
+  // 🌟 新增：每日清零字段
+  const displayTodayActiveFiles = (user.lastCodeDate !== todayStr) ? 0 : (user.todayActiveFiles || 0)
+  const displayTodayFixCount = (user.lastCodeDate !== todayStr) ? 0 : (user.todayFixCount || 0)
+  const displayTodayFeedCount = (user.lastCodeDate !== todayStr) ? 0 : (user.todayFeedCount || 0)
+  const displayTodayWaterCount = (user.lastCodeDate !== todayStr) ? 0 : (user.todayWaterCount || 0)
+
+  // 🌟 新增：节气清零字段
+  const displayTotalActiveFiles = (user.lastTermReset !== currentTerm) ? 0 : (user.totalActiveFiles || 0)
+  const displayTotalFixCount = (user.lastTermReset !== currentTerm) ? 0 : (user.totalFixCount || 0)
 
   return {
     username: user.username,
@@ -159,6 +169,12 @@ function sanitizeUser(user) {
     birthday: user.birthday || '',
     totalCodeLines: displayTotalLines, // 这个继续给你们的【节气周报】用
     todayCodeLines: displayTodayLines, // 🌟 这个给前端的【实时主界面】用！
+    todayActiveFiles: displayTodayActiveFiles, // 🌟 今日活跃文件
+    todayFixCount: displayTodayFixCount, // 🌟 今日修复次数
+    todayFeedCount: displayTodayFeedCount, // 🌟 今日喂食次数
+    todayWaterCount: displayTodayWaterCount, // 🌟 今日浇水次数
+    totalActiveFiles: displayTotalActiveFiles, // 🌟 节气活跃文件总数
+    totalFixCount: displayTotalFixCount, // 🌟 节气修复总次数
     catFood: displayCatFood,
     waterDrops: displayWaterDrops,
     plantStage: displayPlantStage,
@@ -213,6 +229,52 @@ function readNonNegativeMetric(primaryValue, legacyValue) {
   const rawValue = primaryValue !== undefined ? primaryValue : legacyValue
   const value = Number(rawValue || 0)
   return Number.isFinite(value) ? value : NaN
+}
+
+function readStoredMetric(primaryValue, legacyValue) {
+  const rawValue = primaryValue ?? legacyValue ?? 0
+  const value = Number(rawValue || 0)
+  return Number.isFinite(value) && value > 0 ? value : 0
+}
+
+function summarizeTermDailyStats(stats) {
+  const summary = {
+    totalCodeLines: 0,
+    totalActiveFileCount: 0,
+    totalFixCount: 0,
+    totalFeedCount: 0,
+    totalWaterCount: 0,
+    totalCareActionCount: 0,
+    totalCommitCount: 0,
+    totalErrorCount: 0
+  }
+
+  stats.forEach((stat) => {
+    summary.totalCodeLines += readStoredMetric(stat.codeLines, 0)
+    summary.totalActiveFileCount = Math.max(
+      summary.totalActiveFileCount,
+      readStoredMetric(stat.activeFileCount, stat.commitCount)
+    )
+    summary.totalFixCount = Math.max(
+      summary.totalFixCount,
+      readStoredMetric(stat.fixCount, stat.errorCount)
+    )
+    const feedCount = readStoredMetric(stat.feedCount, 0)
+    const waterCount = readStoredMetric(stat.waterCount, 0)
+    summary.totalFeedCount += feedCount
+    summary.totalWaterCount += waterCount
+    summary.totalCareActionCount += feedCount + waterCount
+    summary.totalCommitCount = Math.max(
+      summary.totalCommitCount,
+      readStoredMetric(stat.commitCount, stat.activeFileCount)
+    )
+    summary.totalErrorCount = Math.max(
+      summary.totalErrorCount,
+      readStoredMetric(stat.errorCount, stat.fixCount)
+    )
+  })
+
+  return summary
 }
 
 app.get('/', (req, res) => {
@@ -298,14 +360,18 @@ app.post('/api/login', async (req, res) => {
 app.post('/api/sync', authenticateToken, async (req, res) => {
   try {
     const addedLines = Number(req.body.addedLines || 0);
+    const addedActiveFiles = Number(req.body.addedActiveFiles || 0); // 🌟 新增
+    const addedFixes = Number(req.body.addedFixes || 0); // 🌟 新增
     let catFood = Number(req.body.catFood || 0);
     let waterDrops = Number(req.body.waterDrops || 0);
     let plantStage = Number(req.body.plantStage || 1);
+    const todayFeedCount = Number(req.body.todayFeedCount || 0); // 🌟 新增
+    const todayWaterCount = Number(req.body.todayWaterCount || 0); // 🌟 新增
 
     if (!Number.isFinite(addedLines) || addedLines < 0 || addedLines > 5000) {
       return res.status(400).json({ success: false, message: 'Invalid addedLines value.' });
     }
-    if (![catFood, waterDrops, plantStage].every(Number.isFinite)) {
+    if (![catFood, waterDrops, plantStage, addedActiveFiles, addedFixes, todayFeedCount, todayWaterCount].every(Number.isFinite)) {
       return res.status(400).json({ success: false, message: 'Invalid sync payload.' });
     }
 
@@ -318,35 +384,52 @@ app.post('/api/sync', authenticateToken, async (req, res) => {
     const todayStr = getBeijingDateStr(now);
     const currentTerm = getSolarTermByTime(now);
 
-    // 🌟 轨道 1：【每日清零逻辑】只针对 todayCodeLines
+    // 🌟 轨道 1：【每日清零逻辑】针对 today 系字段
     if (user.lastCodeDate !== todayStr) {
-      user.todayCodeLines = addedLines; // 跨天，今天从新增的行数重新算
+      user.todayCodeLines = addedLines;
+      user.todayActiveFiles = addedActiveFiles; // 🌟 跨天重置
+      user.todayFixCount = addedFixes; // 🌟 跨天重置
+      user.todayFeedCount = todayFeedCount; // 🌟 跨天重置
+      user.todayWaterCount = todayWaterCount; // 🌟 跨天重置
       user.lastCodeDate = todayStr;
     } else {
       user.todayCodeLines = (user.todayCodeLines || 0) + addedLines;
+      user.todayActiveFiles = (user.todayActiveFiles || 0) + addedActiveFiles; // 🌟 累加
+      user.todayFixCount = (user.todayFixCount || 0) + addedFixes; // 🌟 累加
+      if (todayFeedCount !== undefined) user.todayFeedCount = todayFeedCount; // 🌟 用最新值覆盖
+      if (todayWaterCount !== undefined) user.todayWaterCount = todayWaterCount; // 🌟 用最新值覆盖
     }
 
-    // 🌟 轨道 2：【节气清零逻辑】针对 totalCodeLines 和 猫粮等
+    // 🌟 轨道 2：【节气清零逻辑】针对 total 系字段 + 猫粮等
     if (user.lastTermReset !== currentTerm) {
 
       // ⚠️ 核心修复：自动快照！在清零前，把上个节气的所有心血封存！
       if (user.lastTermReset) {
+        const previousTermStats = await TermDailyStat.find({ userId: user._id, solarTerm: user.lastTermReset })
+        const previousTermSummary = summarizeTermDailyStats(previousTermStats)
+        const hasPreviousTermStats = previousTermStats.length > 0
         user.pastTermArchive = {
           solarTerm: user.lastTermReset,
           totalCodeLines: user.totalCodeLines || 0,
+          totalActiveFiles: hasPreviousTermStats ? previousTermSummary.totalActiveFileCount : (user.totalActiveFiles || 0), // 🌟 封存上赛季单日峰值活跃文件
+          totalFixCount: hasPreviousTermStats ? previousTermSummary.totalFixCount : (user.totalFixCount || 0), // 🌟 封存上赛季单日峰值修复次数
           plantStage: user.plantStage || 1,
           catFood: user.catFood || 0,
           waterDrops: user.waterDrops || 0
         };
       }
 
-      user.totalCodeLines = addedLines; // 跨节气了，节气总数重新算
+      user.totalCodeLines = addedLines;
+      user.totalActiveFiles = addedActiveFiles; // 🌟 跨节气重置
+      user.totalFixCount = addedFixes; // 🌟 跨节气重置
       user.catFood = 0;
       user.waterDrops = 0;
       user.plantStage = 1;
       user.lastTermReset = currentTerm;
     } else {
-      user.totalCodeLines = (user.totalCodeLines || 0) + addedLines; // 没跨节气，总数疯狂累加！
+      user.totalCodeLines = (user.totalCodeLines || 0) + addedLines;
+      user.totalActiveFiles = (user.totalActiveFiles || 0) + addedActiveFiles; // 🌟 累加
+      user.totalFixCount = (user.totalFixCount || 0) + addedFixes; // 🌟 累加
       user.catFood = Math.max(0, catFood);
       user.waterDrops = Math.max(0, waterDrops);
       user.plantStage = Math.max(1, Math.min(4, plantStage));
@@ -355,7 +438,7 @@ app.post('/api/sync', authenticateToken, async (req, res) => {
     user.lastSyncTime = now;
     await user.save();
 
-    console.log(`[sync] ${user.username}: lines=${user.totalCodeLines}, term=${currentTerm}`);
+    console.log(`[sync] ${user.username}: lines=${user.totalCodeLines}, files=${user.totalActiveFiles}, fixes=${user.totalFixCount}, term=${currentTerm}`);
     res.json({ success: true, message: 'Cloud sync completed.', data: sanitizeUser(user) });
   } catch (error) {
     console.error('Sync failed:', error);
@@ -419,7 +502,7 @@ app.get('/api/user/:username', authenticateToken, async (req, res) => {
 app.get('/api/admin/users', authenticateAdmin, async (req, res) => {
   try {
     const users = await User.find({})
-      .select('username role nickname birthday totalCodeLines todayCodeLines catFood waterDrops plantStage lastSyncTime createdAt updatedAt')
+      .select('username role nickname birthday totalCodeLines todayCodeLines todayActiveFiles todayFixCount todayFeedCount todayWaterCount totalActiveFiles totalFixCount catFood waterDrops plantStage lastSyncTime createdAt updatedAt')
       .sort({ createdAt: -1 })
 
     const data = users.map((user) => ({
@@ -430,6 +513,12 @@ app.get('/api/admin/users', authenticateAdmin, async (req, res) => {
       birthday: user.birthday || '',
       totalCodeLines: user.totalCodeLines || 0,
       todayCodeLines: user.todayCodeLines || 0,
+      todayActiveFiles: user.todayActiveFiles || 0,
+      todayFixCount: user.todayFixCount || 0,
+      todayFeedCount: user.todayFeedCount || 0,
+      todayWaterCount: user.todayWaterCount || 0,
+      totalActiveFiles: user.totalActiveFiles || 0,
+      totalFixCount: user.totalFixCount || 0,
       catFood: user.catFood || 0,
       waterDrops: user.waterDrops || 0,
       plantStage: user.plantStage || 1,
@@ -452,13 +541,15 @@ app.post('/api/term-stats', authenticateToken, async (req, res) => {
     const codeLines = Number(req.body.codeLines || 0)
     const activeFileCount = readNonNegativeMetric(req.body.activeFileCount, req.body.commitCount)
     const fixCount = readNonNegativeMetric(req.body.fixCount, req.body.errorCount)
+    const feedCount = readNonNegativeMetric(req.body.feedCount, req.body.todayFeedCount)
+    const waterCount = readNonNegativeMetric(req.body.waterCount, req.body.todayWaterCount)
     const userId = req.auth.userId
 
     if (!date || !solarTerm) {
       return res.status(400).json({ success: false, message: 'date and solarTerm are required.' })
     }
 
-    if (![codeLines, activeFileCount, fixCount].every(isNonNegativeFiniteNumber)) {
+    if (![codeLines, activeFileCount, fixCount, feedCount, waterCount].every(isNonNegativeFiniteNumber)) {
       return res.status(400).json({ success: false, message: 'Term stats values must be non-negative numbers.' })
     }
 
@@ -477,6 +568,10 @@ app.post('/api/term-stats', authenticateToken, async (req, res) => {
           fixCount,
           commitCount: activeFileCount,
           errorCount: fixCount
+        },
+        $max: {
+          feedCount,
+          waterCount
         }
       },
       { upsert: true, new: true, setDefaultsOnInsert: true }
@@ -500,18 +595,16 @@ app.get('/api/term-stats', authenticateToken, async (req, res) => {
 
     const stats = await TermDailyStat.find({ userId, solarTerm }).sort({ date: 1 })
 
-    let totalCodeLines = 0
-    let totalActiveFileCount = 0
-    let totalFixCount = 0
-    let totalCommitCount = 0
-    let totalErrorCount = 0
-    stats.forEach((stat) => {
-      totalCodeLines += stat.codeLines || 0
-      totalActiveFileCount += stat.activeFileCount ?? stat.commitCount ?? 0
-      totalFixCount += stat.fixCount ?? stat.errorCount ?? 0
-      totalCommitCount += stat.commitCount ?? stat.activeFileCount ?? 0
-      totalErrorCount += stat.errorCount ?? stat.fixCount ?? 0
-    })
+    const {
+      totalCodeLines,
+      totalActiveFileCount,
+      totalFixCount,
+      totalFeedCount,
+      totalWaterCount,
+      totalCareActionCount,
+      totalCommitCount,
+      totalErrorCount
+    } = summarizeTermDailyStats(stats)
 
     res.json({
       success: true,
@@ -521,6 +614,9 @@ app.get('/api/term-stats', authenticateToken, async (req, res) => {
         totalCodeLines,
         totalActiveFileCount,
         totalFixCount,
+        totalFeedCount,
+        totalWaterCount,
+        totalCareActionCount,
         totalCommitCount,
         totalErrorCount
       }
@@ -575,24 +671,22 @@ app.post('/api/reports', authenticateToken, async (req, res) => {
 
     const stats = await TermDailyStat.find({ userId, solarTerm }).sort({ date: 1 })
 
-    let totalCodeLines = 0
-    let totalActiveFileCount = 0
-    let totalFixCount = 0
-    let totalCommitCount = 0
-    let totalErrorCount = 0
-    stats.forEach((stat) => {
-      totalCodeLines += stat.codeLines || 0
-      totalActiveFileCount += stat.activeFileCount ?? stat.commitCount ?? 0
-      totalFixCount += stat.fixCount ?? stat.errorCount ?? 0
-      totalCommitCount += stat.commitCount ?? stat.activeFileCount ?? 0
-      totalErrorCount += stat.errorCount ?? stat.fixCount ?? 0
-    })
+    const {
+      totalCodeLines,
+      totalActiveFileCount,
+      totalFixCount,
+      totalFeedCount,
+      totalWaterCount,
+      totalCareActionCount,
+      totalCommitCount,
+      totalErrorCount
+    } = summarizeTermDailyStats(stats)
 
     const report = await TermReport.findOneAndUpdate(
       { userId, solarTerm },
       {
         $set: {
-          periodStart, periodEnd, totalCodeLines, totalActiveFileCount, totalFixCount, totalCommitCount, totalErrorCount,
+          periodStart, periodEnd, totalCodeLines, totalActiveFileCount, totalFixCount, totalFeedCount, totalWaterCount, totalCareActionCount, totalCommitCount, totalErrorCount,
           plantStage, harvestStage, harvestTier, harvestItemName, dailyStats: stats, summary
         }
       },
