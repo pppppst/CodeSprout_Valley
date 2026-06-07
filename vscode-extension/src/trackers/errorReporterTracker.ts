@@ -55,6 +55,22 @@ const EXCLUDED_DIRECTORIES = new Set([
 const activeFiles = new Set<string>();
 const fileProblemState = new Map<string, boolean>();
 const saveTimers = new Map<string, NodeJS.Timeout>();
+let activeFilesDate = '';
+
+function getBeijingDateString(date = new Date()): string {
+    return new Date(date.getTime() + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
+
+function ensureDailyStateFresh(): void {
+    const today = getBeijingDateString();
+    if (activeFilesDate === today) {
+        return;
+    }
+
+    activeFiles.clear();
+    fileProblemState.clear();
+    activeFilesDate = today;
+}
 
 function isValidCodeFile(document: vscode.TextDocument): boolean {
     if (!isValidFileUri(document.uri) || document.isUntitled) {
@@ -176,6 +192,8 @@ function scheduleSavedDocumentProcessing(document: vscode.TextDocument): void {
 }
 
 function handleSavedNotebook(document: vscode.NotebookDocument): void {
+    ensureDailyStateFresh();
+
     if (!isValidNotebook(document)) {
         return;
     }
@@ -194,6 +212,8 @@ function handleSavedNotebook(document: vscode.NotebookDocument): void {
 }
 
 function handleSavedDocument(document: vscode.TextDocument): void {
+    ensureDailyStateFresh();
+
     if (!isValidCodeFile(document)) {
         return;
     }
@@ -231,6 +251,7 @@ function handleSavedDocument(document: vscode.TextDocument): void {
 export function activateErrorReporterTracker(context: vscode.ExtensionContext): void {
     activeFiles.clear();
     fileProblemState.clear();
+    activeFilesDate = getBeijingDateString();
     clearSaveTimers();
 
     context.subscriptions.push(
@@ -250,6 +271,7 @@ export function deactivateErrorReporterTracker(): void {
     clearSaveTimers();
     activeFiles.clear();
     fileProblemState.clear();
+    activeFilesDate = '';
 }
 
 function clearSaveTimers(): void {
