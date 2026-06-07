@@ -5,6 +5,7 @@ type Disposable = { dispose: () => void }
 type MockEmitter<T> = {
   event: (listener: Listener<T>) => Disposable
   fire: (event: T) => void
+  clear: () => void
 }
 
 function createEmitter<T>(): MockEmitter<T> {
@@ -20,6 +21,9 @@ function createEmitter<T>(): MockEmitter<T> {
       for (const listener of Array.from(listeners)) {
         listener(event)
       }
+    },
+    clear: () => {
+      listeners.clear()
     }
   }
 }
@@ -66,6 +70,9 @@ async function loadTracker() {
 
 beforeEach(() => {
   vi.useFakeTimers()
+  vi.setSystemTime(new Date('2026-06-06T01:00:00+08:00'))
+  saveTextEmitter.clear()
+  saveNotebookEmitter.clear()
   reportSpy.mockClear()
   diagnostics = []
 })
@@ -129,5 +136,51 @@ describe('errorReporterTracker', () => {
     await vi.advanceTimersByTimeAsync(1000)
 
     expect(reportSpy).not.toHaveBeenCalled()
+  })
+
+  it('counts the same active file again on the next Beijing date', async () => {
+    const tracker = await loadTracker()
+    const document = createDocument('C:/demo.ts')
+
+    tracker.activateErrorReporterTracker({ subscriptions: [] } as any)
+    saveTextEmitter.fire(document)
+    await vi.advanceTimersByTimeAsync(1000)
+
+    reportSpy.mockClear()
+    vi.setSystemTime(new Date('2026-06-07T01:00:00+08:00'))
+    saveTextEmitter.fire(document)
+    await vi.advanceTimersByTimeAsync(1000)
+
+    expect(reportSpy).toHaveBeenCalledWith({
+      activeFileIncrement: 1,
+      fixCountIncrement: 0
+    })
+  })
+
+  it('does not carry yesterday problem state into a new Beijing date', async () => {
+    const tracker = await loadTracker()
+    const document = createDocument('C:/demo.py')
+
+    tracker.activateErrorReporterTracker({ subscriptions: [] } as any)
+
+    diagnostics = [
+      {
+        severity: 0,
+        message: 'bad'
+      }
+    ]
+    saveTextEmitter.fire(document)
+    await vi.advanceTimersByTimeAsync(1000)
+
+    reportSpy.mockClear()
+    diagnostics = []
+    vi.setSystemTime(new Date('2026-06-07T01:00:00+08:00'))
+    saveTextEmitter.fire(document)
+    await vi.advanceTimersByTimeAsync(1000)
+
+    expect(reportSpy).toHaveBeenCalledWith({
+      activeFileIncrement: 1,
+      fixCountIncrement: 0
+    })
   })
 })

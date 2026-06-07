@@ -7,6 +7,10 @@ import WeatherEffect from './components/WeatherEffect.vue'
 import { useFloatingWindow } from './components/floatingWindow'
 import { SolarUtil } from 'lunar-javascript'
 import { bubbleMessages, sleepBubbleMessages } from './bubbleMessages'
+import {
+  getMinimumWateringsForPlantStage as calculateMinimumWateringsForPlantStage,
+  getPlantStageByWaterings as calculatePlantStageByWaterings
+} from './utils/plantGrowth'
 
 const authUsername = ref('')
 const authPassword = ref('')
@@ -336,6 +340,7 @@ async function processAutoSync() {
   if (autoSyncInFlight) return
 
   const hasPendingStats = pendingSync.value.codeLines > 0 || pendingSync.value.activeFileCount > 0 || pendingSync.value.fixCount > 0
+  const hasCareStats = feedCount.value > 0 || waterCount.value > 0
   const localUnsyncedLines = Math.max(0, Number(pendingSync.value.archiveCodeLines || 0))
   const localUnsyncedActiveFiles = Math.max(0, Number(pendingSync.value.activeFileCount || 0)) // 🌟 暂存增量
   const localUnsyncedFixes = Math.max(0, Number(pendingSync.value.fixCount || 0)) // 🌟 暂存增量
@@ -403,13 +408,15 @@ async function processAutoSync() {
     }
 
     // 再上传当天的节气增量统计数据（有数据才上传，避免空请求）
-    if (hasPendingStats) {
+    if (hasPendingStats || hasCareStats) {
       const statsPayload = {
         date: getTodayString(),
         solarTerm: currentSolarTerm.value || '未知',
         codeLines: pendingSync.value.codeLines,
         activeFileCount: pendingSync.value.activeFileCount,
-        fixCount: pendingSync.value.fixCount
+        fixCount: pendingSync.value.fixCount,
+        feedCount: feedCount.value,
+        waterCount: waterCount.value
       }
 
       await uploadTermDailyStat(cloudToken.value, statsPayload)
@@ -957,6 +964,8 @@ async function openArchive() {
               displayFixes = pastTermArchive.value.totalFixCount || 0
             }
 
+            const displayCareActions = getReportCareActionCount(report)
+
             cloudReports[termKey] = {
               termName: report.solarTerm,
               termKey: termKey,
@@ -964,10 +973,9 @@ async function openArchive() {
               date: `${formatReportDate(report.createdAt) || report.periodStart} 生成`,
               owner: loggedInUser.value || '本地种植者',
               totalCodeLines: displayCodeLines, // 👈 使用修复后的数值（含快照回退）
-              activeFileCount: displayActiveFiles, // 👈 含快照回退
-              fixCount: displayFixes, // 👈 含快照回退
-              fixRate: formatFixRate(displayActiveFiles, displayFixes),
-              totalActions: '已归档',
+              activeFileCount: displayActiveFiles, // 👈 单日最多活跃文件数（含快照回退）
+              fixCount: displayFixes, // 👈 单日最高修复次数（含快照回退）
+              totalActions: displayCareActions,
               plantStage: displayPlantStage || '已归档', // 👈 快照阶段优先
               syncText: '☁️ 云端永久快照',
               summary: reportSummary
@@ -1050,8 +1058,8 @@ async function generateAndSaveCloudReport() {
     const displayCodeLines = isTimeTravel ? (pastTermArchive.value.totalCodeLines || data.totalCodeLines) : data.totalCodeLines
     const displayActiveFiles = isTimeTravel ? (pastTermArchive.value.totalActiveFiles || getReportActiveFileCount(data)) : getReportActiveFileCount(data)
     const displayFixCount = isTimeTravel ? (pastTermArchive.value.totalFixCount || getReportFixCount(data)) : getReportFixCount(data)
-    const displayFixRate = formatFixRate(displayActiveFiles, displayFixCount)
-    const summaryText = `${SOLAR_TERM_REPORT_YEAR} 年${termName}节气已结算。云端记录显示：本节气期间累计编写代码 ${displayCodeLines} 行，活跃文件 ${displayActiveFiles} 个，修复次数 ${displayFixCount} 次，修复率 ${displayFixRate}。`
+    const displayCareActions = getReportCareActionCount(data)
+    const summaryText = `${SOLAR_TERM_REPORT_YEAR} 年${termName}节气已结算。云端记录显示：本节气期间累计编写代码 ${displayCodeLines} 行，单日最多活跃文件 ${displayActiveFiles} 个，单日最高修复次数 ${displayFixCount} 次，累计照料 ${displayCareActions} 次。`
 
     // 🌟 时空回溯：快照里的植物阶段 > 本地 harvest 记录 > 浇水推算
     const archiveStage = isTimeTravel ? pastTermArchive.value.plantStage : undefined
@@ -1080,10 +1088,9 @@ async function generateAndSaveCloudReport() {
       date: `${getTodayString()} 生成`,
       owner: loggedInUser.value || '本地种植者',
       totalCodeLines: displayCodeLines, // 🌟 使用快照/API统一后的真实行数
-      activeFileCount: getReportActiveFileCount(savedReport) || displayActiveFiles, // 🌟 快照修正后的活跃文件数
-      fixCount: getReportFixCount(savedReport) || displayFixCount, // 🌟 快照修正后的修复次数
-      fixRate: formatFixRate(getReportActiveFileCount(savedReport) || displayActiveFiles, getReportFixCount(savedReport) || displayFixCount),
-      totalActions: '已归档',
+      activeFileCount: getReportActiveFileCount(savedReport) || displayActiveFiles, // 🌟 单日最多活跃文件数
+      fixCount: getReportFixCount(savedReport) || displayFixCount, // 🌟 单日最高修复次数
+      totalActions: getReportCareActionCount(savedReport) || displayCareActions,
       plantStage: stage,
       syncText: '☁️ 云端永久快照',
       summary: summaryText
@@ -1258,6 +1265,15 @@ function getReportActiveFileCount(source) {
 
 function getReportFixCount(source) {
   return Math.max(0, Number(source?.totalFixCount ?? source?.fixCount ?? source?.totalErrorCount ?? source?.errorCount ?? 0))
+}
+
+function getReportCareActionCount(source) {
+  const explicitTotal = Number(source?.totalCareActionCount)
+  if (Number.isFinite(explicitTotal) && explicitTotal >= 0) return explicitTotal
+
+  const feedCount = Math.max(0, Number(source?.totalFeedCount ?? source?.feedCount ?? 0))
+  const waterCount = Math.max(0, Number(source?.totalWaterCount ?? source?.waterCount ?? 0))
+  return feedCount + waterCount
 }
 
 function formatFixRate(activeFileCount, fixCount) {
@@ -1510,19 +1526,12 @@ const currentBgUrl = computed(() => {
   return new URL('./assets/background.webp', import.meta.url).href;
 })
 
-function getPlantStageByWaterings(waterings) {
-  if (waterings >= 4) return 4 // 120
-  if (waterings >= 3) return 3 // 60
-  if (waterings >= 2) return 2 // 30
-  return 1
+function getPlantStageByWaterings(waterings, role = userRole.value) {
+  return calculatePlantStageByWaterings(waterings, role)
 }
 
-function getMinimumWateringsForPlantStage(stage) {
-  const targetStage = Math.max(1, Math.min(4, Number(stage) || 1))
-  for (let waterings = 0; waterings <= MAX_WATERINGS_PER_TERM; waterings++) {
-    if (getPlantStageByWaterings(waterings) >= targetStage) return waterings
-  }
-  return MAX_WATERINGS_PER_TERM
+function getMinimumWateringsForPlantStage(stage, role = userRole.value) {
+  return calculateMinimumWateringsForPlantStage(stage, role)
 }
 
 function getHarvestTierByStage(stage) {
@@ -2038,7 +2047,6 @@ function simulateTermSettlement() {
       totalCodeLines: sandboxDisplayLines, // 🌟 优先使用快照数据
       activeFileCount: todayActiveFiles.value,
       fixCount: todayFixes.value,
-      fixRate: formatFixRate(todayActiveFiles.value, todayFixes.value),
       totalActions,
       plantStage: isSandboxTimeTravel ? pastTermArchive.value.plantStage : stage, // 🌟 快照阶段优先
       syncText: '沙盘模拟结算，不会同步云端',
@@ -2556,9 +2564,8 @@ onUnmounted(() => {
 
                   <div v-if="selectedArchiveReportRecord" class="term-report-data-grid">
                     <div class="term-report-data-item"><span>累计代码</span><strong>{{ selectedArchiveReportRecord.totalCodeLines }}</strong></div>
-                    <div class="term-report-data-item"><span>修复率</span><strong>{{ selectedArchiveReportRecord.fixRate }}</strong></div>
-                    <div class="term-report-data-item"><span>活跃文件</span><strong>{{ selectedArchiveReportRecord.activeFileCount }}</strong></div>
-                    <div class="term-report-data-item"><span>修复次数</span><strong>{{ selectedArchiveReportRecord.fixCount }}</strong></div>
+                    <div class="term-report-data-item"><span>单日最多活跃文件</span><strong>{{ selectedArchiveReportRecord.activeFileCount }}</strong></div>
+                    <div class="term-report-data-item"><span>单日最高修复次数</span><strong>{{ selectedArchiveReportRecord.fixCount }}</strong></div>
                     <div class="term-report-data-item"><span>照料次数</span><strong>{{ selectedArchiveReportRecord.totalActions }}</strong></div>
                     <div class="term-report-data-item"><span>植物阶段</span><strong>{{ selectedArchiveReportRecord.plantStage }}</strong></div>
                   </div>
@@ -4283,4 +4290,3 @@ body.floating {
   height: 100% !important;
 }
 </style>
-
