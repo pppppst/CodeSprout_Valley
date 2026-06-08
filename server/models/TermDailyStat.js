@@ -7,6 +7,7 @@ const termDailyStatSchema = new mongoose.Schema({
   codeLines: { type: Number, default: 0 },
   activeFileCount: { type: Number, default: 0 },
   fixCount: { type: Number, default: 0 },
+  codingDurationMinutes: { type: Number, default: 0 },
   feedCount: { type: Number, default: 0 },
   waterCount: { type: Number, default: 0 },
   commitCount: { type: Number, default: 0 },
