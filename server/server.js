@@ -242,6 +242,9 @@ function summarizeTermDailyStats(stats) {
     totalCodeLines: 0,
     totalActiveFileCount: 0,
     totalFixCount: 0,
+    activeFileTotal: 0,
+    fixTotal: 0,
+    totalCodingDurationMinutes: 0,
     totalFeedCount: 0,
     totalWaterCount: 0,
     totalCareActionCount: 0,
@@ -251,6 +254,8 @@ function summarizeTermDailyStats(stats) {
 
   stats.forEach((stat) => {
     summary.totalCodeLines += readStoredMetric(stat.codeLines, 0)
+    summary.activeFileTotal += readStoredMetric(stat.activeFileCount, stat.commitCount)
+    summary.fixTotal += readStoredMetric(stat.fixCount, stat.errorCount)
     summary.totalActiveFileCount = Math.max(
       summary.totalActiveFileCount,
       readStoredMetric(stat.activeFileCount, stat.commitCount)
@@ -259,6 +264,7 @@ function summarizeTermDailyStats(stats) {
       summary.totalFixCount,
       readStoredMetric(stat.fixCount, stat.errorCount)
     )
+    summary.totalCodingDurationMinutes += readStoredMetric(stat.codingDurationMinutes, 0)
     const feedCount = readStoredMetric(stat.feedCount, 0)
     const waterCount = readStoredMetric(stat.waterCount, 0)
     summary.totalFeedCount += feedCount
@@ -413,6 +419,9 @@ app.post('/api/sync', authenticateToken, async (req, res) => {
           totalCodeLines: user.totalCodeLines || 0,
           totalActiveFiles: hasPreviousTermStats ? previousTermSummary.totalActiveFileCount : (user.totalActiveFiles || 0), // 🌟 封存上赛季单日峰值活跃文件
           totalFixCount: hasPreviousTermStats ? previousTermSummary.totalFixCount : (user.totalFixCount || 0), // 🌟 封存上赛季单日峰值修复次数
+          activeFileTotal: hasPreviousTermStats ? previousTermSummary.activeFileTotal : (user.totalActiveFiles || 0),
+          fixTotal: hasPreviousTermStats ? previousTermSummary.fixTotal : (user.totalFixCount || 0),
+          totalCodingDurationMinutes: hasPreviousTermStats ? previousTermSummary.totalCodingDurationMinutes : 0,
           plantStage: user.plantStage || 1,
           catFood: user.catFood || 0,
           waterDrops: user.waterDrops || 0
@@ -541,6 +550,7 @@ app.post('/api/term-stats', authenticateToken, async (req, res) => {
     const codeLines = Number(req.body.codeLines || 0)
     const activeFileCount = readNonNegativeMetric(req.body.activeFileCount, req.body.commitCount)
     const fixCount = readNonNegativeMetric(req.body.fixCount, req.body.errorCount)
+    const codingDurationMinutes = readNonNegativeMetric(req.body.codingDurationMinutes, 0)
     const feedCount = readNonNegativeMetric(req.body.feedCount, req.body.todayFeedCount)
     const waterCount = readNonNegativeMetric(req.body.waterCount, req.body.todayWaterCount)
     const userId = req.auth.userId
@@ -549,7 +559,7 @@ app.post('/api/term-stats', authenticateToken, async (req, res) => {
       return res.status(400).json({ success: false, message: 'date and solarTerm are required.' })
     }
 
-    if (![codeLines, activeFileCount, fixCount, feedCount, waterCount].every(isNonNegativeFiniteNumber)) {
+    if (![codeLines, activeFileCount, fixCount, codingDurationMinutes, feedCount, waterCount].every(isNonNegativeFiniteNumber)) {
       return res.status(400).json({ success: false, message: 'Term stats values must be non-negative numbers.' })
     }
 
@@ -566,6 +576,7 @@ app.post('/api/term-stats', authenticateToken, async (req, res) => {
           codeLines,
           activeFileCount,
           fixCount,
+          codingDurationMinutes,
           commitCount: activeFileCount,
           errorCount: fixCount
         },
@@ -599,6 +610,9 @@ app.get('/api/term-stats', authenticateToken, async (req, res) => {
       totalCodeLines,
       totalActiveFileCount,
       totalFixCount,
+      activeFileTotal,
+      fixTotal,
+      totalCodingDurationMinutes,
       totalFeedCount,
       totalWaterCount,
       totalCareActionCount,
@@ -614,6 +628,9 @@ app.get('/api/term-stats', authenticateToken, async (req, res) => {
         totalCodeLines,
         totalActiveFileCount,
         totalFixCount,
+        activeFileTotal,
+        fixTotal,
+        totalCodingDurationMinutes,
         totalFeedCount,
         totalWaterCount,
         totalCareActionCount,
@@ -675,6 +692,9 @@ app.post('/api/reports', authenticateToken, async (req, res) => {
       totalCodeLines,
       totalActiveFileCount,
       totalFixCount,
+      activeFileTotal,
+      fixTotal,
+      totalCodingDurationMinutes,
       totalFeedCount,
       totalWaterCount,
       totalCareActionCount,
@@ -686,7 +706,8 @@ app.post('/api/reports', authenticateToken, async (req, res) => {
       { userId, solarTerm },
       {
         $set: {
-          periodStart, periodEnd, totalCodeLines, totalActiveFileCount, totalFixCount, totalFeedCount, totalWaterCount, totalCareActionCount, totalCommitCount, totalErrorCount,
+          periodStart, periodEnd, totalCodeLines, totalActiveFileCount, totalFixCount, totalCodingDurationMinutes, totalFeedCount, totalWaterCount, totalCareActionCount, totalCommitCount, totalErrorCount,
+          activeFileTotal, fixTotal,
           plantStage, harvestStage, harvestTier, harvestItemName, dailyStats: stats, summary
         }
       },

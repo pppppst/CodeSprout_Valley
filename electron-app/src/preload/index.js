@@ -22,7 +22,8 @@ const api = {
     ipcRenderer.on('activity:update', listener)
     return () => ipcRenderer.removeListener('activity:update', listener)
   },
-  getLatestActivity: () => ipcRenderer.invoke('activity:get-latest')
+  getLatestActivity: () => ipcRenderer.invoke('activity:get-latest'),
+  saveReportPng: (payload) => ipcRenderer.invoke('report:save-png', payload)
 }
 
 if (process.contextIsolated) {

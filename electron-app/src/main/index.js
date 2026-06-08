@@ -1,6 +1,7 @@
-import { app, shell, BrowserWindow, Menu, Tray, ipcMain } from 'electron'
+import { app, shell, BrowserWindow, Menu, Tray, ipcMain, dialog } from 'electron'
 import { join } from 'path'
 import http from 'node:http'
+import fs from 'node:fs/promises'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 
@@ -33,6 +34,43 @@ ipcMain.handle('get-window-position', () => {
     return { x, y }
   }
   return { x: 0, y: 0 }
+})
+
+ipcMain.handle('report:save-png', async (_event, { dataUrl, defaultFileName } = {}) => {
+  if (typeof dataUrl !== 'string' || !dataUrl.startsWith('data:image/png;base64,')) {
+    return { ok: false, canceled: false, message: 'PNG 数据无效。' }
+  }
+
+  try {
+    const safeFileName =
+      String(defaultFileName || '节气周报.png')
+        .replace(/[\\/:*?"<>|]/g, '')
+        .replace(/\s+/g, '')
+        .slice(0, 80) || '节气周报.png'
+    const fileName = safeFileName.toLowerCase().endsWith('.png') ? safeFileName : `${safeFileName}.png`
+
+    const result = await dialog.showSaveDialog(mainWindow || undefined, {
+      title: '保存节气周报',
+      defaultPath: fileName,
+      filters: [{ name: 'PNG 图片', extensions: ['png'] }]
+    })
+
+    if (result.canceled || !result.filePath) {
+      return { ok: false, canceled: true }
+    }
+
+    const base64 = dataUrl.replace(/^data:image\/png;base64,/, '')
+    await fs.writeFile(result.filePath, Buffer.from(base64, 'base64'))
+
+    return { ok: true, canceled: false, filePath: result.filePath }
+  } catch (error) {
+    console.error('Save report PNG failed:', error)
+    return {
+      ok: false,
+      canceled: false,
+      message: error?.message ? `保存失败：${error.message}` : '保存失败，请重试。'
+    }
+  }
 })
 
 // ============ 悬浮窗鼠标穿透控制 ============

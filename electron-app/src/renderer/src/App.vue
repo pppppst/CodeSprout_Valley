@@ -1,9 +1,11 @@
 ﻿<script setup>
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
+import { toPng } from 'html-to-image'
 import { getActiveJieQi } from './utils/calendar'
 // 🌟 1. 引入所有新的云端接口
 import { registerAccount, loginAccount, fetchCloudSave, fetchAdminUsers, updateUserProfile, syncCloudSave, uploadTermDailyStat, fetchTermStats, saveTermReport, fetchHistoryReports } from './utils/cloudApi'
 import WeatherEffect from './components/WeatherEffect.vue'
+import SolarTermShareReport from './components/SolarTermShareReport.vue'
 import { useFloatingWindow } from './components/floatingWindow'
 import { SolarUtil } from 'lunar-javascript'
 import { bubbleMessages, sleepBubbleMessages } from './bubbleMessages'
@@ -11,6 +13,7 @@ import {
   getMinimumWateringsForPlantStage as calculateMinimumWateringsForPlantStage,
   getPlantStageByWaterings as calculatePlantStageByWaterings
 } from './utils/plantGrowth'
+import { resolveSolarTermReportTitle } from './utils/solarTermReportTitleRules'
 
 const authUsername = ref('')
 const authPassword = ref('')
@@ -29,6 +32,10 @@ const selectedArchiveTermKey = ref('')
 const latestHarvestTermKey = ref('')
 const latestReportTermKey = ref('')
 const previewImage = ref(null)
+const shareReportNode = ref(null)
+const isExportingShareReport = ref(false)
+const isShareReportPreviewOpen = ref(false)
+const shareReportExportStatus = ref('')
 const isAuthenticated = computed(() => Boolean(cloudToken.value && loggedInUser.value && !isRestoringSession.value))
 const isAdmin = computed(() => userRole.value === 'admin')
 
@@ -40,11 +47,16 @@ const AUTO_SYNC_INTERVAL_MS = 5000
 
 function normalizePendingSync(value) {
   const codeLines = Math.max(0, Number(value?.codeLines || 0))
+  const activeFileCount = Math.max(0, Number(value?.activeFileCount ?? value?.commitCount ?? 0))
+  const fixCount = Math.max(0, Number(value?.fixCount ?? value?.errorCount ?? 0))
   return {
     codeLines,
-    activeFileCount: Math.max(0, Number(value?.activeFileCount ?? value?.commitCount ?? 0)),
-    fixCount: Math.max(0, Number(value?.fixCount ?? value?.errorCount ?? 0)),
+    activeFileCount,
+    fixCount,
+    codingDurationMinutes: Math.max(0, Number(value?.codingDurationMinutes ?? 0)),
     archiveCodeLines: Math.max(0, Number(value?.archiveCodeLines ?? codeLines)),
+    archiveActiveFileCount: Math.max(0, Number(value?.archiveActiveFileCount ?? activeFileCount)),
+    archiveFixCount: Math.max(0, Number(value?.archiveFixCount ?? fixCount)),
     leftoverLines: Math.max(0, Number(value?.leftoverLines || 0))
   }
 }
@@ -64,7 +76,7 @@ function loadPendingSyncFromStorage(username = loggedInUser.value) {
 
 function savePendingSyncToStorage() {
   const normalized = normalizePendingSync(pendingSync.value)
-  if (normalized.codeLines === 0 && normalized.activeFileCount === 0 && normalized.fixCount === 0 && normalized.archiveCodeLines === 0 && normalized.leftoverLines === 0) {
+  if (normalized.codeLines === 0 && normalized.activeFileCount === 0 && normalized.fixCount === 0 && normalized.codingDurationMinutes === 0 && normalized.archiveCodeLines === 0 && normalized.archiveActiveFileCount === 0 && normalized.archiveFixCount === 0 && normalized.leftoverLines === 0) {
     clearPendingSyncStorage()
     return
   }
@@ -339,11 +351,11 @@ async function processAutoSync() {
   if (!isAuthenticated.value) return
   if (autoSyncInFlight) return
 
-  const hasPendingStats = pendingSync.value.codeLines > 0 || pendingSync.value.activeFileCount > 0 || pendingSync.value.fixCount > 0
+  const hasPendingStats = pendingSync.value.codeLines > 0 || pendingSync.value.activeFileCount > 0 || pendingSync.value.fixCount > 0 || pendingSync.value.codingDurationMinutes > 0
   const hasCareStats = feedCount.value > 0 || waterCount.value > 0
   const localUnsyncedLines = Math.max(0, Number(pendingSync.value.archiveCodeLines || 0))
-  const localUnsyncedActiveFiles = Math.max(0, Number(pendingSync.value.activeFileCount || 0)) // 🌟 暂存增量
-  const localUnsyncedFixes = Math.max(0, Number(pendingSync.value.fixCount || 0)) // 🌟 暂存增量
+  const localUnsyncedActiveFiles = Math.max(0, Number(pendingSync.value.archiveActiveFileCount || 0)) // 🌟 用户实时总数同步增量
+  const localUnsyncedFixes = Math.max(0, Number(pendingSync.value.archiveFixCount || 0)) // 🌟 用户实时总数同步增量
   const leftoverLines = Math.max(0, Number(pendingSync.value.leftoverLines || 0))
 
   let newLeftoverLines = leftoverLines
@@ -395,6 +407,8 @@ async function processAutoSync() {
 
     // 🌟 结算成功后，清空”本次新增”，存好”代码零头”
     pendingSync.value.archiveCodeLines = 0
+    pendingSync.value.archiveActiveFileCount = 0
+    pendingSync.value.archiveFixCount = 0
     pendingSync.value.leftoverLines = newLeftoverLines
 
     // 🌟 检测并响应后端的跨天/跨节气事件
@@ -415,6 +429,7 @@ async function processAutoSync() {
         codeLines: pendingSync.value.codeLines,
         activeFileCount: pendingSync.value.activeFileCount,
         fixCount: pendingSync.value.fixCount,
+        codingDurationMinutes: pendingSync.value.codingDurationMinutes,
         feedCount: feedCount.value,
         waterCount: waterCount.value
       }
@@ -425,7 +440,10 @@ async function processAutoSync() {
       pendingSync.value.codeLines = 0
       pendingSync.value.activeFileCount = 0
       pendingSync.value.fixCount = 0
+      pendingSync.value.codingDurationMinutes = 0
       pendingSync.value.archiveCodeLines = 0
+      pendingSync.value.archiveActiveFileCount = 0
+      pendingSync.value.archiveFixCount = 0
     }
     if (hasAutoSyncFailure) {
       authStatusMessage.value = '自动同步已恢复，暂存数据已补传'
@@ -462,7 +480,16 @@ function handleLogout() {
   selectedArchiveTermKey.value = ''
   latestHarvestTermKey.value = ''
   latestReportTermKey.value = ''
-  pendingSync.value = { codeLines: 0, activeFileCount: 0, fixCount: 0, archiveCodeLines: 0, leftoverLines: 0 }
+  pendingSync.value = {
+    codeLines: 0,
+    activeFileCount: 0,
+    fixCount: 0,
+    codingDurationMinutes: 0,
+    archiveCodeLines: 0,
+    archiveActiveFileCount: 0,
+    archiveFixCount: 0,
+    leftoverLines: 0
+  }
   isSettingsPanelOpen.value = false
   isCloudAccountPanelOpen.value = false
   isUserProfilePanelOpen.value = false
@@ -890,6 +917,7 @@ function applyActivityUpdate(data) {
     catExp.value += data.activeFileIncrement * 5
     todayActiveFiles.value += data.activeFileIncrement
     pendingSync.value.activeFileCount += data.activeFileIncrement
+    pendingSync.value.archiveActiveFileCount = Math.max(0, Number(pendingSync.value.archiveActiveFileCount || 0)) + data.activeFileIncrement
     
     message.value = `✅ ${data.activeFileIncrement} 个活跃文件已记录，经验提升中...`
     catState.value = 'happy'
@@ -899,10 +927,15 @@ function applyActivityUpdate(data) {
   if (typeof data.fixCountIncrement === 'number' && Number.isFinite(data.fixCountIncrement) && data.fixCountIncrement > 0) {
     todayFixes.value += data.fixCountIncrement
     pendingSync.value.fixCount += data.fixCountIncrement
+    pendingSync.value.archiveFixCount = Math.max(0, Number(pendingSync.value.archiveFixCount || 0)) + data.fixCountIncrement
     
     message.value = `🛠️ 修复 ${data.fixCountIncrement} 个问题文件，继续保持！`
     catState.value = 'happy'
     resetCatState(3000)
+  }
+
+  if (typeof data.codingDuration === 'number' && Number.isFinite(data.codingDuration) && data.codingDuration > 0) {
+    pendingSync.value.codingDurationMinutes += data.codingDuration / 60
   }
 }
 
@@ -957,11 +990,23 @@ async function openArchive() {
             // 🌟 活跃文件/修复次数快照回退
             let displayActiveFiles = getReportActiveFileCount(report)
             let displayFixes = getReportFixCount(report)
+            let displayActiveFileTotal = getReportActiveFileTotal(report)
+            let displayFixTotal = getReportFixTotal(report)
+            let displayCodingDurationMinutes = getReportCodingDurationMinutes(report)
             if (!displayActiveFiles && isArchiveTerm) {
               displayActiveFiles = pastTermArchive.value.totalActiveFiles || 0
             }
             if (!displayFixes && isArchiveTerm) {
               displayFixes = pastTermArchive.value.totalFixCount || 0
+            }
+            if (!displayActiveFileTotal && isArchiveTerm) {
+              displayActiveFileTotal = pastTermArchive.value.activeFileTotal || 0
+            }
+            if (!displayFixTotal && isArchiveTerm) {
+              displayFixTotal = pastTermArchive.value.fixTotal || 0
+            }
+            if (!displayCodingDurationMinutes && isArchiveTerm) {
+              displayCodingDurationMinutes = pastTermArchive.value.totalCodingDurationMinutes || 0
             }
 
             const displayCareActions = getReportCareActionCount(report)
@@ -975,10 +1020,14 @@ async function openArchive() {
               totalCodeLines: displayCodeLines, // 👈 使用修复后的数值（含快照回退）
               activeFileCount: displayActiveFiles, // 👈 单日最多活跃文件数（含快照回退）
               fixCount: displayFixes, // 👈 单日最高修复次数（含快照回退）
+              activeFileTotal: displayActiveFileTotal,
+              fixTotal: displayFixTotal,
+              codingDurationMinutes: displayCodingDurationMinutes,
               totalActions: displayCareActions,
               plantStage: displayPlantStage || '已归档', // 👈 快照阶段优先
               syncText: '☁️ 云端永久快照',
-              summary: reportSummary
+              summary: reportSummary,
+              dailyStats: Array.isArray(report.dailyStats) ? report.dailyStats : []
             }
 
             const restoredHarvest = buildHarvestRecordFromReport(report, termKey)
@@ -1058,8 +1107,9 @@ async function generateAndSaveCloudReport() {
     const displayCodeLines = isTimeTravel ? (pastTermArchive.value.totalCodeLines || data.totalCodeLines) : data.totalCodeLines
     const displayActiveFiles = isTimeTravel ? (pastTermArchive.value.totalActiveFiles || getReportActiveFileCount(data)) : getReportActiveFileCount(data)
     const displayFixCount = isTimeTravel ? (pastTermArchive.value.totalFixCount || getReportFixCount(data)) : getReportFixCount(data)
+    const displayCodingDurationMinutes = isTimeTravel ? (pastTermArchive.value.totalCodingDurationMinutes || getReportCodingDurationMinutes(data)) : getReportCodingDurationMinutes(data)
     const displayCareActions = getReportCareActionCount(data)
-    const summaryText = `${SOLAR_TERM_REPORT_YEAR} 年${termName}节气已结算。云端记录显示：本节气期间累计编写代码 ${displayCodeLines} 行，单日最多活跃文件 ${displayActiveFiles} 个，单日最高修复次数 ${displayFixCount} 次，累计照料 ${displayCareActions} 次。`
+    const summaryText = `${SOLAR_TERM_REPORT_YEAR} 年${termName}节气已结算。云端记录显示：本节气期间累计编写代码 ${displayCodeLines} 行，单日最多活跃文件 ${displayActiveFiles} 个，单日最高修复次数 ${displayFixCount} 次，累计专注开发 ${formatShareReportDuration(displayCodingDurationMinutes)}，累计照料 ${displayCareActions} 次。`
 
     // 🌟 时空回溯：快照里的植物阶段 > 本地 harvest 记录 > 浇水推算
     const archiveStage = isTimeTravel ? pastTermArchive.value.plantStage : undefined
@@ -1090,10 +1140,14 @@ async function generateAndSaveCloudReport() {
       totalCodeLines: displayCodeLines, // 🌟 使用快照/API统一后的真实行数
       activeFileCount: getReportActiveFileCount(savedReport) || displayActiveFiles, // 🌟 单日最多活跃文件数
       fixCount: getReportFixCount(savedReport) || displayFixCount, // 🌟 单日最高修复次数
+      activeFileTotal: getReportActiveFileTotal(savedReport) || getReportActiveFileTotal(data),
+      fixTotal: getReportFixTotal(savedReport) || getReportFixTotal(data),
+      codingDurationMinutes: getReportCodingDurationMinutes(savedReport) || displayCodingDurationMinutes,
       totalActions: getReportCareActionCount(savedReport) || displayCareActions,
       plantStage: stage,
       syncText: '☁️ 云端永久快照',
-      summary: summaryText
+      summary: summaryText,
+      dailyStats: Array.isArray(savedReport.dailyStats) ? savedReport.dailyStats : (Array.isArray(data.dailyStats) ? data.dailyStats : [])
     })
     latestReportTermKey.value = termKey
 
@@ -1109,6 +1163,7 @@ async function generateAndSaveCloudReport() {
 function closeArchive() {
   isArchiveOpen.value = false
   selectedArchiveTermKey.value = ''
+  closeShareReportPreview()
   closeImagePreview()
 }
 function selectArchiveTerm(termKey) {
@@ -1120,6 +1175,17 @@ function openImagePreview(src, alt) {
 }
 function closeImagePreview() {
   previewImage.value = null
+}
+
+function openShareReportPreview() {
+  if (!selectedShareReport.value) return
+  shareReportExportStatus.value = ''
+  isShareReportPreviewOpen.value = true
+}
+
+function closeShareReportPreview() {
+  isShareReportPreviewOpen.value = false
+  shareReportExportStatus.value = ''
 }
 
 function openSettings() {
@@ -1267,6 +1333,24 @@ function getReportFixCount(source) {
   return Math.max(0, Number(source?.totalFixCount ?? source?.fixCount ?? source?.totalErrorCount ?? source?.errorCount ?? 0))
 }
 
+function sumReportDailyMetric(source, primaryKey, legacyKey) {
+  const dailyStats = Array.isArray(source?.dailyStats) ? source.dailyStats : []
+  if (!dailyStats.length) return 0
+
+  return dailyStats.reduce((sum, stat) => {
+    const value = Number(stat?.[primaryKey] ?? stat?.[legacyKey] ?? 0)
+    return sum + (Number.isFinite(value) && value > 0 ? value : 0)
+  }, 0)
+}
+
+function getReportActiveFileTotal(source) {
+  return Math.max(0, Number(source?.activeFileTotal ?? sumReportDailyMetric(source, 'activeFileCount', 'commitCount') ?? 0))
+}
+
+function getReportFixTotal(source) {
+  return Math.max(0, Number(source?.fixTotal ?? sumReportDailyMetric(source, 'fixCount', 'errorCount') ?? 0))
+}
+
 function getReportCareActionCount(source) {
   const explicitTotal = Number(source?.totalCareActionCount)
   if (Number.isFinite(explicitTotal) && explicitTotal >= 0) return explicitTotal
@@ -1274,6 +1358,16 @@ function getReportCareActionCount(source) {
   const feedCount = Math.max(0, Number(source?.totalFeedCount ?? source?.feedCount ?? 0))
   const waterCount = Math.max(0, Number(source?.totalWaterCount ?? source?.waterCount ?? 0))
   return feedCount + waterCount
+}
+
+function getReportCodingDurationMinutes(source) {
+  const explicitMinutes = Number(source?.totalCodingDurationMinutes ?? source?.codingDurationMinutes ?? 0)
+  if (Number.isFinite(explicitMinutes) && explicitMinutes >= 0) return explicitMinutes
+
+  const seconds = Number(source?.codingDuration ?? 0)
+  if (Number.isFinite(seconds) && seconds >= 0) return seconds / 60
+
+  return 0
 }
 
 function formatFixRate(activeFileCount, fixCount) {
@@ -1495,7 +1589,7 @@ const solarTermPlantMap = {
   '芒种': '栀子花',
   '夏至': '南瓜',
   '小暑': '芭蕉',
-  '大暑': '凤仙花',
+  '大暑': '萱草花',
   '立秋': '蓝雪花',
   '处暑': '玉簪',
   '白露': '昙花',
@@ -1649,6 +1743,138 @@ const selectedArchiveSolarTermImage = computed(() => {
   if (!selectedArchiveTerm.value || (!selectedArchiveHasArchiveContent.value && !selectedArchiveIsCurrentTerm.value)) return ''
   return solarTermImageModules[`./assets/SolarTerm/${selectedArchiveTerm.value.key}.webp`] || ''
 })
+
+function formatShareReportDuration(minutes) {
+  const safeMinutes = Math.max(0, Math.round(Number(minutes) || 0))
+  const hours = Math.floor(safeMinutes / 60)
+  const mins = safeMinutes % 60
+  if (hours <= 0) return `${mins} 分钟`
+  if (mins <= 0) return `${hours} 小时`
+  return `${hours} 小时 ${mins} 分钟`
+}
+
+function normalizePlantRewards(record) {
+  if (!record) return []
+
+  if (Array.isArray(record.plants)) {
+    return record.plants
+      .map((plant) => ({
+        name: String(plant.name || plant.itemName || '').trim(),
+        count: Math.max(1, Number(plant.count || 1)),
+        image: plant.image || plant.imageUrl || record.image || ''
+      }))
+      .filter((plant) => plant.name)
+  }
+
+  const itemName = String(record.itemName || record.harvestItemName || '').trim()
+  return itemName
+    ? [
+        {
+          name: itemName,
+          count: Math.max(1, Number(record.count || 1)),
+          image: record.image || ''
+        }
+      ]
+    : []
+}
+
+const selectedShareReport = computed(() => {
+  const reportRecord = selectedArchiveReportRecord.value
+  const term = selectedArchiveTerm.value
+  if (!reportRecord || !term) return null
+
+  const stats = {
+    codeAdded: Math.max(0, Number(reportRecord.totalCodeLines || 0)),
+    activeFileCount: Math.max(0, Number(reportRecord.activeFileCount || 0)),
+    fixCount: Math.max(0, Number(reportRecord.fixCount || 0)),
+    activeFileTotal: getReportActiveFileTotal(reportRecord) || Math.max(0, Number(reportRecord.activeFileCount || 0)),
+    fixTotal: getReportFixTotal(reportRecord) || Math.max(0, Number(reportRecord.fixCount || 0)),
+    codingDurationMinutes: getReportCodingDurationMinutes(reportRecord)
+  }
+  const titleResult = resolveSolarTermReportTitle(stats)
+  const period = getSolarTermPeriod2026(term.name)
+  const plants = normalizePlantRewards(selectedArchiveHarvestRecord.value)
+
+  return {
+    termName: term.name,
+    periodText: `${period.start} - ${period.end}`,
+    codeAdded: stats.codeAdded,
+    activeFileCount: stats.activeFileCount,
+    fixCount: stats.fixCount,
+    activeFileTotal: stats.activeFileTotal,
+    fixTotal: stats.fixTotal,
+    durationText: formatShareReportDuration(stats.codingDurationMinutes),
+    titleId: titleResult.id,
+    title: titleResult.title,
+    titleSlogan: titleResult.slogan,
+    titleReason: titleResult.reason,
+    plants
+  }
+})
+
+function makeDownloadFileName(text) {
+  return String(text || '节气周报')
+    .replace(/[\\/:*?"<>|]/g, '')
+    .replace(/\s+/g, '')
+    .slice(0, 60)
+}
+
+async function exportSelectedSolarTermReport() {
+  if (!selectedShareReport.value || !shareReportNode.value || isExportingShareReport.value) return
+
+  isExportingShareReport.value = true
+  shareReportExportStatus.value = '正在生成图片...'
+  message.value = `正在导出 ${selectedShareReport.value.termName} 节气周报...`
+
+  try {
+    await nextTick()
+    if (document.fonts?.ready) {
+      await document.fonts.ready
+    }
+
+    const reportElement = shareReportNode.value.querySelector('.solar-term-share-report')
+    if (!reportElement) throw new Error('未找到节气周报预览内容')
+
+    const dataUrl = await toPng(reportElement, {
+      width: 1080,
+      height: 1920,
+      pixelRatio: 1,
+      cacheBust: true,
+      backgroundColor: '#dcb77b'
+    })
+
+    if (!window.api?.saveReportPng) {
+      throw new Error('当前环境不支持自定义保存路径')
+    }
+
+    const saveResult = await window.api.saveReportPng({
+      dataUrl,
+      defaultFileName: `${makeDownloadFileName(selectedShareReport.value.termName)}-节气周报.png`
+    })
+
+    if (saveResult?.canceled) {
+      shareReportExportStatus.value = '已取消导出。'
+      message.value = '已取消导出节气周报。'
+      resetCatState(2000)
+      return
+    }
+
+    if (!saveResult?.ok) {
+      throw new Error(saveResult?.message || '保存图片失败')
+    }
+
+    shareReportExportStatus.value = `保存成功：${saveResult.filePath}`
+    message.value = `节气周报已保存：${saveResult.filePath}`
+    resetCatState(2500)
+  } catch (error) {
+    console.error('Export solar term report failed:', error)
+    shareReportExportStatus.value = `导出失败：${error?.message || '未知错误'}`
+    message.value = `导出失败：${error?.message || '未知错误'}`
+    resetCatState(3000)
+  } finally {
+    isExportingShareReport.value = false
+  }
+}
 
 const archiveCells = computed(() => {
   return solarTermEntries.map((term) => ({
@@ -2047,6 +2273,7 @@ function simulateTermSettlement() {
       totalCodeLines: sandboxDisplayLines, // 🌟 优先使用快照数据
       activeFileCount: todayActiveFiles.value,
       fixCount: todayFixes.value,
+      codingDurationMinutes: pendingSync.value.codingDurationMinutes,
       totalActions,
       plantStage: isSandboxTimeTravel ? pastTermArchive.value.plantStage : stage, // 🌟 快照阶段优先
       syncText: '沙盘模拟结算，不会同步云端',
@@ -2566,8 +2793,15 @@ onUnmounted(() => {
                     <div class="term-report-data-item"><span>累计代码</span><strong>{{ selectedArchiveReportRecord.totalCodeLines }}</strong></div>
                     <div class="term-report-data-item"><span>单日最多活跃文件</span><strong>{{ selectedArchiveReportRecord.activeFileCount }}</strong></div>
                     <div class="term-report-data-item"><span>单日最高修复次数</span><strong>{{ selectedArchiveReportRecord.fixCount }}</strong></div>
+                    <div class="term-report-data-item"><span>专注开发</span><strong>{{ formatShareReportDuration(getReportCodingDurationMinutes(selectedArchiveReportRecord)) }}</strong></div>
                     <div class="term-report-data-item"><span>照料次数</span><strong>{{ selectedArchiveReportRecord.totalActions }}</strong></div>
                     <div class="term-report-data-item"><span>植物阶段</span><strong>{{ selectedArchiveReportRecord.plantStage }}</strong></div>
+                  </div>
+
+                  <div v-if="selectedArchiveReportRecord" class="share-report-actions">
+                    <button class="cloud-btn primary export-share-report-btn" @click="openShareReportPreview">
+                      查看节气周报
+                    </button>
                   </div>
 
                   <div v-if="selectedArchiveReportRecord" class="term-report-paper-footer">
@@ -2578,6 +2812,49 @@ onUnmounted(() => {
             </aside>
           </div>
         </section>
+
+        <div
+          v-if="selectedShareReport"
+          ref="shareReportNode"
+          class="share-report-render-root"
+          aria-hidden="true"
+        >
+          <SolarTermShareReport
+            :report="selectedShareReport"
+          />
+        </div>
+
+        <div
+          v-if="isShareReportPreviewOpen && selectedShareReport"
+          class="share-report-preview-mask"
+          style="-webkit-app-region: no-drag;"
+          @click.self.stop="closeShareReportPreview"
+        >
+          <section class="share-report-preview-panel">
+            <header class="share-report-preview-header">
+              <div>
+                <span>节气周报预览</span>
+                <h3>{{ selectedShareReport.termName }} · 节气记录</h3>
+              </div>
+              <button class="share-report-preview-close" @click="closeShareReportPreview">×</button>
+            </header>
+
+            <div class="share-report-preview-scroll">
+              <div class="share-report-preview-frame">
+                <SolarTermShareReport :report="selectedShareReport" />
+              </div>
+            </div>
+
+            <footer class="share-report-preview-actions">
+              <p v-if="shareReportExportStatus" class="share-report-export-status">
+                {{ shareReportExportStatus }}
+              </p>
+              <button class="cloud-btn primary" :disabled="isExportingShareReport" @click="exportSelectedSolarTermReport">
+                {{ isExportingShareReport ? '正在导出...' : '导出 PNG' }}
+              </button>
+            </footer>
+          </section>
+        </div>
 
         <div
           v-if="previewImage"
@@ -4079,6 +4356,160 @@ onUnmounted(() => {
   padding-top: 14px;
   color: #857458;
   font-size: 12px;
+}
+
+.share-report-actions {
+  display: block;
+  width: 100%;
+  margin-top: 16px;
+}
+
+.export-share-report-btn {
+  width: 100%;
+  padding: 12px;
+  font-weight: 700;
+  background: #4f8f5f;
+}
+
+.export-share-report-btn:disabled {
+  cursor: wait;
+  opacity: 0.72;
+}
+
+.share-report-preview-mask {
+  position: absolute;
+  inset: 0;
+  z-index: 21;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(37, 29, 20, 0.72);
+  pointer-events: auto;
+}
+
+.share-report-preview-panel {
+  --preview-scale: 0.34;
+  display: flex;
+  flex-direction: column;
+  width: min(520px, 92vw);
+  max-height: 92vh;
+  padding: 16px 18px 18px;
+  border: 1px solid rgba(255, 241, 208, 0.42);
+  border-radius: 12px;
+  background: rgba(246, 236, 211, 0.96);
+  color: #4d3722;
+  box-shadow: 0 24px 60px rgba(15, 10, 6, 0.42);
+}
+
+.share-report-preview-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 0 0 12px;
+}
+
+.share-report-preview-header span {
+  display: block;
+  color: #7b8f4f;
+  font-size: 12px;
+}
+
+.share-report-preview-header h3 {
+  margin: 3px 0 0;
+  color: #4d3722;
+  font-family: "华文中宋", KaiTi, STKaiti, serif;
+  font-size: 24px;
+  line-height: 1.15;
+}
+
+.share-report-preview-close {
+  width: 32px;
+  height: 32px;
+  border: 1px solid rgba(134, 99, 58, 0.26);
+  border-radius: 50%;
+  color: #6e5638;
+  background: rgba(255, 248, 228, 0.88);
+  cursor: pointer;
+  font-size: 22px;
+  line-height: 1;
+}
+
+.share-report-preview-scroll {
+  display: flex;
+  justify-content: center;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid rgba(150, 124, 82, 0.22);
+  border-radius: 8px;
+  background: rgba(84, 57, 30, 0.12);
+  scrollbar-color: #d89d58 rgba(225, 202, 163, 0.5);
+  scrollbar-width: thin;
+}
+
+.share-report-preview-scroll::-webkit-scrollbar {
+  width: 9px;
+}
+
+.share-report-preview-scroll::-webkit-scrollbar-track {
+  border-radius: 999px;
+  background: rgba(225, 202, 163, 0.42);
+}
+
+.share-report-preview-scroll::-webkit-scrollbar-thumb {
+  border: 2px solid rgba(246, 235, 211, 0.88);
+  border-radius: 999px;
+  background: #d89d58;
+}
+
+.share-report-preview-frame {
+  flex: 0 0 auto;
+  width: calc(1080px * var(--preview-scale));
+  height: calc(1920px * var(--preview-scale));
+  overflow: hidden;
+  border-radius: 6px;
+  box-shadow: 0 12px 26px rgba(42, 28, 15, 0.32);
+}
+
+.share-report-preview-frame :deep(.solar-term-share-report) {
+  transform: scale(var(--preview-scale));
+  transform-origin: top left;
+}
+
+.share-report-preview-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.share-report-export-status {
+  flex: 1 1 auto;
+  margin: 0;
+  color: #6c5a40;
+  font-size: 12px;
+  line-height: 1.45;
+  text-align: left;
+  word-break: break-all;
+}
+
+.share-report-preview-actions .cloud-btn {
+  min-width: 128px;
+  padding: 10px 16px;
+}
+
+.share-report-render-root {
+  position: fixed;
+  left: -12000px;
+  top: 0;
+  z-index: 1;
+  width: 1080px;
+  height: 1920px;
+  overflow: hidden;
+  pointer-events: none;
 }
 
 .report-mask { position: absolute; inset: 0; z-index: 12; display: flex; align-items: center; justify-content: center; background: rgba(40, 32, 18, 0.28); pointer-events: auto; }
