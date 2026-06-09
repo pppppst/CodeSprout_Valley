@@ -536,10 +536,97 @@ app.get('/api/admin/users', authenticateAdmin, async (req, res) => {
       updatedAt: user.updatedAt
     }))
 
-    res.json({ success: true, data })
+        res.json({ success: true, data })
   } catch (error) {
     console.error('Fetch admin users failed:', error)
     res.status(500).json({ success: false, message: 'Server error.' })
+  }
+})
+
+// ==========================================
+// 🔐 管理员：用户账号管理（删除/角色/密码）
+// ==========================================
+
+// 删除用户
+app.delete('/api/admin/users/:username', authenticateAdmin, async (req, res) => {
+  try {
+    const { username } = req.params
+
+    // 防止管理员删除自己
+    if (username === req.adminUser.username) {
+      return res.status(400).json({ success: false, message: '不能删除自己的账号。' })
+    }
+
+    const deletedUser = await User.findOneAndDelete({ username })
+    if (!deletedUser) {
+      return res.status(404).json({ success: false, message: '用户不存在。' })
+    }
+
+    console.log(`[admin] ${req.adminUser.username} deleted user: ${username}`)
+    res.json({ success: true, message: `用户 ${username} 已删除。` })
+  } catch (error) {
+    console.error('Delete user failed:', error)
+    res.status(500).json({ success: false, message: '服务器错误。' })
+  }
+})
+
+// 修改用户角色
+app.patch('/api/admin/users/:username/role', authenticateAdmin, async (req, res) => {
+  try {
+    const { username } = req.params
+    const { role } = req.body
+
+    if (!role || !['user', 'admin'].includes(role)) {
+      return res.status(400).json({ success: false, message: '角色必须是 user 或 admin。' })
+    }
+
+    // 防止管理员取消自己的管理员身份
+    if (username === req.adminUser.username && role !== 'admin') {
+      return res.status(400).json({ success: false, message: '不能取消自己的管理员身份。' })
+    }
+
+    const updatedUser = await User.findOneAndUpdate(
+      { username },
+      { $set: { role } },
+      { new: true }
+    )
+
+    if (!updatedUser) {
+      return res.status(404).json({ success: false, message: '用户不存在。' })
+    }
+
+    console.log(`[admin] ${req.adminUser.username} set role of ${username} to ${role}`)
+    res.json({ success: true, message: `用户 ${username} 的角色已设为 ${role}。` })
+  } catch (error) {
+    console.error('Update user role failed:', error)
+    res.status(500).json({ success: false, message: '服务器错误。' })
+  }
+})
+
+// 重置用户密码
+app.patch('/api/admin/users/:username/reset-password', authenticateAdmin, async (req, res) => {
+  try {
+    const { username } = req.params
+    const { newPassword } = req.body
+
+    if (!newPassword || newPassword.length < 6) {
+      return res.status(400).json({ success: false, message: '新密码必须至少 6 位。' })
+    }
+
+    const user = await User.findOne({ username })
+    if (!user) {
+      return res.status(404).json({ success: false, message: '用户不存在。' })
+    }
+
+    const salt = await bcrypt.genSalt(10)
+    user.password = await bcrypt.hash(newPassword, salt)
+    await user.save()
+
+    console.log(`[admin] ${req.adminUser.username} reset password for user: ${username}`)
+    res.json({ success: true, message: `用户 ${username} 的密码已重置。` })
+  } catch (error) {
+    console.error('Reset password failed:', error)
+    res.status(500).json({ success: false, message: '服务器错误。' })
   }
 })
 

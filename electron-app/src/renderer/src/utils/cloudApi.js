@@ -52,8 +52,13 @@ export function fetchCloudSave(token) {
   })
 }
 
-export function fetchAdminUsers(token) {
-  return request('/api/admin/users', {
+export function fetchAdminUsers(token, { search = '', sort = '' } = {}) {
+  const params = new URLSearchParams()
+  if (search) params.set('search', search)
+  if (sort) params.set('sort', sort)
+  const queryString = params.toString()
+  const url = '/api/admin/users' + (queryString ? `?${queryString}` : '')
+  return request(url, {
     method: 'GET',
     headers: authHeaders(token)
   })
@@ -118,6 +123,36 @@ export function fetchHistoryReports(token, solarTerm = '') {
   return request(url, {
     method: 'GET',
     headers: authHeaders(token)
+  })
+}
+
+// ==========================================
+// 🔐 管理员：用户账号管理 API
+// ==========================================
+
+// 删除用户
+export function deleteUser(token, username) {
+  return request(`/api/admin/users/${encodeURIComponent(username)}`, {
+    method: 'DELETE',
+    headers: authHeaders(token)
+  })
+}
+
+// 修改用户角色
+export function updateUserRole(token, username, role) {
+  return request(`/api/admin/users/${encodeURIComponent(username)}/role`, {
+    method: 'PATCH',
+    headers: authHeaders(token),
+    body: JSON.stringify({ role })
+  })
+}
+
+// 重置用户密码
+export function resetUserPassword(token, username, newPassword) {
+  return request(`/api/admin/users/${encodeURIComponent(username)}/reset-password`, {
+    method: 'PATCH',
+    headers: authHeaders(token),
+    body: JSON.stringify({ newPassword })
   })
 }
 

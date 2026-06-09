@@ -3,7 +3,7 @@ import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { toPng } from 'html-to-image'
 import { getActiveJieQi } from './utils/calendar'
 // 🌟 1. 引入所有新的云端接口
-import { registerAccount, loginAccount, fetchCloudSave, fetchAdminUsers, updateUserProfile, syncCloudSave, uploadTermDailyStat, fetchTermStats, saveTermReport, fetchHistoryReports } from './utils/cloudApi'
+import { registerAccount, loginAccount, fetchCloudSave, fetchAdminUsers, updateUserProfile, syncCloudSave, uploadTermDailyStat, fetchTermStats, saveTermReport, fetchHistoryReports, deleteUser, updateUserRole, resetUserPassword } from './utils/cloudApi'
 import WeatherEffect from './components/WeatherEffect.vue'
 import SolarTermShareReport from './components/SolarTermShareReport.vue'
 import { useFloatingWindow } from './components/floatingWindow'
@@ -18,6 +18,7 @@ import { resolveSolarTermReportTitle } from './utils/solarTermReportTitleRules'
 const authUsername = ref('')
 const authPassword = ref('')
 const authStatusMessage = ref('等待登录后同步云端存档')
+const isAuthError = ref(false)
 const cloudToken = ref(localStorage.getItem('codeSproutToken') || '')
 const loggedInUser = ref(localStorage.getItem('codeSproutUser') || '')
 const userRole = ref(localStorage.getItem('codeSproutRole') || 'user')
@@ -284,46 +285,83 @@ async function fetchLatestActivitySnapshot() {
 }
 
 async function handleRegister() {
-  if (!authUsername.value.trim() || !authPassword.value) {
-    authStatusMessage.value = '用户名和密码不能为空'
-    return
+    if (!authUsername.value.trim() || !authPassword.value) {
+      authStatusMessage.value = '用户名和密码不能为空'
+      isAuthError.value = true
+      return
+    }
+
+    if (authUsername.value.trim().length > 32) {
+      authStatusMessage.value = '用户名不能超过32个字符'
+      isAuthError.value = true
+      return
+    }
+
+    if (authPassword.value.length < 6) {
+      authStatusMessage.value = '密码至少需要6位'
+      isAuthError.value = true
+      return
+    }
+
+    isCloudBusy.value = true
+    isAuthError.value = false
+    authStatusMessage.value = '正在注册账号...'
+    try {
+      await registerAccount(authUsername.value.trim(), authPassword.value)
+      authStatusMessage.value = '注册成功，请点击登录'
+      isAuthError.value = false
+        } catch (error) {
+      const serverMsg = (error.data && error.data.message) || error.message || ''
+      // 服务端返回英文 'Username already exists.'，前端转成中文提示
+      if (serverMsg.includes('already exists')) {
+        authStatusMessage.value = '注册失败：该用户名已被注册，请换一个用户名'
+      } else if (error.status === 400) {
+        authStatusMessage.value = `注册失败：${serverMsg}`
+      } else {
+        authStatusMessage.value = `注册失败：${error.message || '网络异常，请检查连接'}`
+      }
+      isAuthError.value = true
+    } finally {
+      isCloudBusy.value = false
+    }
   }
 
-  isCloudBusy.value = true
-  authStatusMessage.value = '正在注册账号...'
-  try {
-    await registerAccount(authUsername.value.trim(), authPassword.value)
-    authStatusMessage.value = '注册成功，请点击登录'
-  } catch (error) {
-    authStatusMessage.value = `注册失败：${error.message}`
-  } finally {
-    isCloudBusy.value = false
-  }
-}
+  async function handleLogin() {
+    if (!authUsername.value.trim() || !authPassword.value) {
+      authStatusMessage.value = '用户名和密码不能为空'
+      isAuthError.value = true
+      return
+    }
 
-async function handleLogin() {
-  if (!authUsername.value.trim() || !authPassword.value) {
-    authStatusMessage.value = '用户名和密码不能为空'
-    return
+          isCloudBusy.value = true
+    isAuthError.value = false
+    authStatusMessage.value = '正在登录并拉取云端存档...'
+    try {
+      const result = await loginAccount(authUsername.value.trim(), authPassword.value)
+      setAuthSession(result.token, result.username, { ...result, ...(result.data || {}) })
+      pendingSync.value = loadPendingSyncFromStorage(result.username)
+      applyCloudSave({ ...result, ...(result.data || {}) })
+      await loadCloudSave()
+      isRestoringSession.value = false
+      authStatusMessage.value = '登录成功，云端存档已加载'
+      isAuthError.value = false
+      if (!hasCompletedOnboarding.value) {
+        showOnboarding()
+      }
+        } catch (error) {
+      clearAuthSession()
+      const serverMsg = (error.data && error.data.message) || error.message || ''
+      // 服务端返回英文：'User does not exist.' 或 'Incorrect password.'
+      if (serverMsg.includes('does not exist') || serverMsg.includes('Incorrect') || serverMsg.includes('不存在')) {
+        authStatusMessage.value = '登录失败：用户名或密码错误'
+      } else {
+        authStatusMessage.value = `登录失败：${serverMsg || '网络异常，请检查连接'}`
+      }
+      isAuthError.value = true
+    } finally {
+      isCloudBusy.value = false
+    }
   }
-
-  isCloudBusy.value = true
-  authStatusMessage.value = '正在登录并拉取云端存档...'
-  try {
-    const result = await loginAccount(authUsername.value.trim(), authPassword.value)
-    setAuthSession(result.token, result.username, { ...result, ...(result.data || {}) })
-    pendingSync.value = loadPendingSyncFromStorage(result.username)
-    applyCloudSave({ ...result, ...(result.data || {}) })
-    await loadCloudSave()
-    isRestoringSession.value = false
-    authStatusMessage.value = '登录成功，云端存档已加载'
-  } catch (error) {
-    clearAuthSession()
-    authStatusMessage.value = `登录失败：${error.message}`
-  } finally {
-    isCloudBusy.value = false
-  }
-}
 
 async function handleCloudSync() {
   if (!cloudToken.value) {
@@ -560,6 +598,26 @@ const isAdminUsersPanelOpen = ref(false)
 const adminUsers = ref([])
 const isAdminUsersLoading = ref(false)
 const adminUsersError = ref('')
+const adminSearchQuery = ref('')
+const adminSortBy = ref('registeredAt')
+
+// 客户端搜索+排序：在已加载的用户列表中就地过滤
+const displayedAdminUsers = computed(() => {
+  let list = adminUsers.value
+  const query = adminSearchQuery.value.trim()
+  if (query) {
+    const lowerQuery = query.toLowerCase()
+    list = list.filter(u => u.username && u.username.toLowerCase().includes(lowerQuery))
+  }
+  const sortKey = adminSortBy.value
+  const sorted = [...list]
+  sorted.sort((a, b) => {
+    const aTime = sortKey === 'lastActive' ? (a.lastSyncTime || a.registeredAt || 0) : (a.registeredAt || 0)
+    const bTime = sortKey === 'lastActive' ? (b.lastSyncTime || b.registeredAt || 0) : (b.registeredAt || 0)
+    return new Date(bTime).getTime() - new Date(aTime).getTime()
+  })
+  return sorted
+})
 const userNickname = ref('')
 const userBirthday = ref('')
 const pastTermArchive = ref(null) // 🌟 新增：上个节气的快照存档（防空洞）
@@ -659,6 +717,86 @@ const {
 })
 
 const isAuthGateVisible = computed(() => !isFloatingMode.value && !isAuthenticated.value)
+
+// ==========================================
+// 🌟 新用户引导 (Onboarding)
+// ==========================================
+const ONBOARDING_DONE_KEY = 'codeSproutOnboardingDone'
+const ONBOARDING_TOTAL_STEPS = 7
+const isOnboardingVisible = ref(false)
+const onboardingStep = ref(1)
+
+const hasCompletedOnboarding = computed(() => {
+  return localStorage.getItem(ONBOARDING_DONE_KEY) === 'true'
+})
+
+function markOnboardingComplete() {
+  localStorage.setItem(ONBOARDING_DONE_KEY, 'true')
+  isOnboardingVisible.value = false
+}
+
+function showOnboarding() {
+  onboardingStep.value = 1
+  isOnboardingVisible.value = true
+}
+
+function nextOnboardingStep() {
+  if (onboardingStep.value < ONBOARDING_TOTAL_STEPS) {
+    onboardingStep.value++
+  } else {
+    markOnboardingComplete()
+  }
+}
+
+function prevOnboardingStep() {
+  if (onboardingStep.value > 1) {
+    onboardingStep.value--
+  }
+}
+
+function skipOnboarding() {
+  markOnboardingComplete()
+}
+
+const onboardingSteps = [
+  {
+    title: '🌱 欢迎来到 CodeSprout Valley',
+    icon: '🌿',
+    content: '这里是一个用编程节奏培育植物、陪伴小猫的数字花园。\n\n每次在 VS Code 中写代码，都会让你的花园变得更丰盛——植物会成长，小猫会开心，每一个字符都在为这个世界添砖加瓦。'
+  },
+  {
+    title: '📝 代码 ↔ 资源转换',
+    icon: '⚡',
+    content: '每写 {CODE_LINES_PER_REWARD} 行代码，会为你自动兑换：\n\n🍖 猫粮 × {RESOURCE_PER_REWARD}\n💧 水滴 × {RESOURCE_PER_REWARD}\n\n猫粮可以用来喂猫（每次消耗 10 份），水滴用来浇灌植物（每次消耗 20 份）。\n\n未满 50 行的零头会暂存起来，下次凑满再兑换。'
+      .replace('{CODE_LINES_PER_REWARD}', CODE_LINES_PER_REWARD)
+      .replaceAll('{RESOURCE_PER_REWARD}', RESOURCE_PER_REWARD)
+  },
+  {
+    title: '🌿 二十四节气的秘密',
+    icon: '🗓️',
+    content: '一年分为 24 个节气，每个节气约 15 天。这是游戏的「时间节拍器」。\n\n• 每个节气开始时，猫粮、水滴清零重置\n• 植物会根据你的浇水情况生长（4 个阶段）\n• 旧节气的数据不会被删除——它会归档到「节气档案」中！\n\n每个节气对应一种独特的植物，集齐 24 种植物图鉴也是一种乐趣。'
+  },
+  {
+    title: '🐱 猫咪互动指南',
+    icon: '🐱',
+    content: '你的小猫每天都有不同的状态：\n\n😴 睡觉 → 昨天没有喂过，它在休息\n😺 玩耍 → 今天已经喂过，活力满满\n\n点击猫咪：会开心地撒娇 💕\n点击气泡：会随机更换一句治愈话语 🫧\n喂猫按钮：消耗 10 猫粮，提升猫咪好感度 🍖\n\n*PS：猫咪每天喂一次就行了，别撑着小猫~*'
+  },
+  {
+    title: '💧 浇灌你的植物',
+    icon: '🌱',
+    content: '消耗 20 水滴即可给当前节气的植物浇水一次。\n\n植物分为 4 个成长阶段：\n🌱 阶段 1：初始积累（浇水 0 次）\n🌿 阶段 2：稳定发芽（浇水 30 次）\n🌳 阶段 3：茁壮成长（浇水 60 次）\n🌸 阶段 4：繁花盛开（浇水 120 次）\n\n每个节气独立计数，新节气开始植物会从小苗重新生长。'
+  },
+  {
+    title: '📖 节气档案与图鉴',
+    icon: '📚',
+    content: '每个节气结束时，你可以在「节气档案」中：\n\n🎨 查看收获的植物图鉴（根据你的代码量评级）\n📊 生成永久的云端节气报告\n📈 回顾本节气的代码行数、活跃文件、修复率等数据\n\n档案中的图鉴按品质分三级：\n🌱 幼苗级 | 🌳 成熟级 | 🌟 珍稀级\n\n报告会永久保存在云端，可以随时翻阅过去的编程旅程。'
+  },
+  {
+    title: '📊 状态面板说明',
+    icon: '📋',
+    content: '主界面左上角的「实时状态」面板显示了：\n\n• 今日代码行数 + 进度条（每 50 行点亮一格）\n• 🍖 剩余猫粮数量\n• 🚿 剩余水滴数量\n• ✅ 今日活跃文件数（来自 VS Code 插件）\n• 🛠️ 今日修复次数（来自 VS Code 插件）\n• 🐱 今日喂猫/浇水次数\n\n快去写代码吧——光标每跳动一次，你的花园都在悄悄生长！ 🚀'
+  }
+]
 
 
 
@@ -1214,26 +1352,158 @@ function closeUserProfilePanel() {
   isUserProfilePanelOpen.value = false
 }
 
-async function openAdminUsersPanel() {
-  if (!isAdmin.value || !cloudToken.value) return
+async function loadAdminUsers() {
+    if (!isAdmin.value || !cloudToken.value) return
 
-  isAdminUsersPanelOpen.value = true
-  adminUsersError.value = ''
-  isAdminUsersLoading.value = true
+    adminUsersError.value = ''
+    isAdminUsersLoading.value = true
 
+    try {
+      // 只拉取全部用户，不过 search/sort——由客户端就地处理
+      const result = await fetchAdminUsers(cloudToken.value)
+      adminUsers.value = Array.isArray(result.data) ? result.data : []
+    } catch (error) {
+      if (error.status === 401) clearAuthSession()
+      adminUsersError.value = `用户数据加载失败：${error.message}`
+    } finally {
+      isAdminUsersLoading.value = false
+    }
+  }
+
+  async function openAdminUsersPanel() {
+    if (!isAdmin.value || !cloudToken.value) return
+
+    isAdminUsersPanelOpen.value = true
+    adminSearchQuery.value = ''
+    adminSortBy.value = 'registeredAt'
+    await loadAdminUsers()
+  }
+
+  function onAdminSearchInput() {
+    // 客户端搜索，无需 API 调用
+    // v-model 已绑定 adminSearchQuery，displayedAdminUsers 会自动重新计算
+  }
+
+  function onAdminSortChange() {
+    // 客户端排序，无需 API 调用
+    // displayedAdminUsers 会自动重新计算
+  }
+
+function closeAdminUsersPanel() {
+    isAdminUsersPanelOpen.value = false
+    showDeleteConfirm.value = false
+    showResetPwdDialog.value = false
+    adminActionMessage.value = ''
+        // 客户端搜索无需清理定时器
+  }
+
+// ========== 管理员：用户账号管理操作 ==========
+const isAdminActing = ref(false)
+const showDeleteConfirm = ref(false)
+const deleteTargetUsername = ref('')
+const showResetPwdDialog = ref(false)
+const resetPwdUsername = ref('')
+const resetPwdNewPassword = ref('')
+const adminActionMessage = ref('')
+
+function confirmDeleteUser(username) {
+  deleteTargetUsername.value = username
+  showDeleteConfirm.value = true
+  adminActionMessage.value = ''
+}
+
+function cancelDeleteUser() {
+  showDeleteConfirm.value = false
+  deleteTargetUsername.value = ''
+  adminActionMessage.value = ''
+}
+
+async function handleDeleteUser() {
+  if (!cloudToken.value || !deleteTargetUsername.value) return
+  isAdminActing.value = true
+  adminActionMessage.value = ''
   try {
-    const result = await fetchAdminUsers(cloudToken.value)
-    adminUsers.value = Array.isArray(result.data) ? result.data : []
+    const result = await deleteUser(cloudToken.value, deleteTargetUsername.value)
+    adminUsers.value = adminUsers.value.filter(u => u.username !== deleteTargetUsername.value)
+    adminActionMessage.value = result.message || '删除成功'
+    showDeleteConfirm.value = false
   } catch (error) {
     if (error.status === 401) clearAuthSession()
-    adminUsersError.value = `用户数据加载失败：${error.message}`
+    adminActionMessage.value = `删除失败：${error.message}`
   } finally {
-    isAdminUsersLoading.value = false
+    isAdminActing.value = false
   }
 }
 
-function closeAdminUsersPanel() {
-  isAdminUsersPanelOpen.value = false
+function openResetPasswordDialog(username) {
+  resetPwdUsername.value = username
+  resetPwdNewPassword.value = ''
+  showResetPwdDialog.value = true
+  adminActionMessage.value = ''
+}
+
+function closeResetPasswordDialog() {
+  showResetPwdDialog.value = false
+  resetPwdUsername.value = ''
+  resetPwdNewPassword.value = ''
+  adminActionMessage.value = ''
+}
+
+async function handleResetPassword() {
+  if (!cloudToken.value || !resetPwdUsername.value || !resetPwdNewPassword.value || resetPwdNewPassword.value.length < 6) return
+  isAdminActing.value = true
+  adminActionMessage.value = ''
+  try {
+    const result = await resetUserPassword(cloudToken.value, resetPwdUsername.value, resetPwdNewPassword.value)
+    adminActionMessage.value = result.message || '密码已重置'
+    resetPwdNewPassword.value = ''
+  } catch (error) {
+    if (error.status === 401) clearAuthSession()
+    adminActionMessage.value = `重置失败：${error.message}`
+  } finally {
+    isAdminActing.value = false
+  }
+}
+
+async function handlePromoteUser(username) {
+  if (!cloudToken.value || !username) return
+  isAdminActing.value = true
+  adminActionMessage.value = ''
+  try {
+    const result = await updateUserRole(cloudToken.value, username, 'admin')
+    // 更新本地列表
+    const user = adminUsers.value.find(u => u.username === username)
+    if (user) {
+      user.role = 'admin'
+      user.isAdmin = true
+    }
+    adminActionMessage.value = result.message || '已设为管理员'
+  } catch (error) {
+    if (error.status === 401) clearAuthSession()
+    adminActionMessage.value = `操作失败：${error.message}`
+  } finally {
+    isAdminActing.value = false
+  }
+}
+
+async function handleDemoteUser(username) {
+  if (!cloudToken.value || !username) return
+  isAdminActing.value = true
+  adminActionMessage.value = ''
+  try {
+    const result = await updateUserRole(cloudToken.value, username, 'user')
+    const user = adminUsers.value.find(u => u.username === username)
+    if (user) {
+      user.role = 'user'
+      user.isAdmin = false
+    }
+    adminActionMessage.value = result.message || '已取消管理员'
+  } catch (error) {
+    if (error.status === 401) clearAuthSession()
+    adminActionMessage.value = `操作失败：${error.message}`
+  } finally {
+    isAdminActing.value = false
+  }
 }
 
 function formatAdminDate(value) {
@@ -2334,10 +2604,14 @@ onMounted(() => {
 
   if (cloudToken.value) {
     loadCloudSave()
-      .then(() => {
+            .then(() => {
         isRestoringSession.value = false
         authStatusMessage.value = '已恢复登录状态，云端存档已加载'
         fetchLatestActivitySnapshot()
+        // 🌟 会话恢复后自动显示新用户引导（仅首次）
+        if (!hasCompletedOnboarding.value) {
+          showOnboarding()
+        }
       })
       .catch((error) => {
         clearAuthSession()
@@ -2419,11 +2693,60 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <div class="cloud-status auth-gate-status">{{ authStatusMessage }}</div>
+      <div class="cloud-status auth-gate-status" :class="{ 'cloud-status-error': isAuthError }">{{ authStatusMessage }}</div>
     </section>
   </div>
 
-  <div v-else class="authenticated-shell">
+      <div class="authenticated-shell">
+
+    <!-- 🌟 新用户引导遮罩（浮动在 authenticated 内容之上） -->
+    <div
+      v-if="isOnboardingVisible && !isFloatingMode"
+      class="onboarding-mask"
+      style="-webkit-app-region: no-drag;"
+    >
+      <div class="onboarding-panel">
+        <div class="onboarding-step-indicator">
+          <span
+            v-for="i in ONBOARDING_TOTAL_STEPS"
+            :key="i"
+            class="onboarding-dot"
+            :class="{ active: i === onboardingStep }"
+          ></span>
+        </div>
+
+        <div class="onboarding-icon-row">
+          {{ onboardingSteps[onboardingStep - 1].icon }}
+        </div>
+
+        <h2 class="onboarding-title">{{ onboardingSteps[onboardingStep - 1].title }}</h2>
+
+        <div class="onboarding-content">
+          <p>{{ onboardingSteps[onboardingStep - 1].content }}</p>
+        </div>
+
+        <div class="onboarding-actions">
+          <button class="onboarding-btn onboarding-skip" @click="skipOnboarding">
+            {{ onboardingStep < ONBOARDING_TOTAL_STEPS ? '跳过指引' : '完成' }}
+          </button>
+          <div class="onboarding-nav">
+            <button
+              v-if="onboardingStep > 1"
+              class="onboarding-btn"
+              @click="prevOnboardingStep"
+            >← 上一步</button>
+            <button
+              class="onboarding-btn onboarding-next"
+              @click="nextOnboardingStep"
+            >{{ onboardingStep < ONBOARDING_TOTAL_STEPS ? '下一步 →' : '✨我已知晓！' }}</button>
+          </div>
+        </div>
+
+        <div class="onboarding-step-text">
+          {{ onboardingStep }} / {{ ONBOARDING_TOTAL_STEPS }}
+        </div>
+      </div>
+    </div>
   <!-- 第一层：设置面板（背景遮罩 + 设置面板） -->
   <div
     v-if="isSettingsPanelOpen && !isFloatingMode"
@@ -2438,6 +2761,11 @@ onUnmounted(() => {
       </div>
 
       <div class="settings-panel-content">
+                <button class="settings-menu-item" @click="showOnboarding">
+          <span class="settings-menu-icon">🌟</span>
+          <span class="settings-menu-label">使用指引</span>
+          <span class="settings-menu-arrow">→</span>
+        </button>
         <button class="settings-menu-item" @click="openCloudAccountPanel">
           <span class="settings-menu-icon">☁️</span>
           <span class="settings-menu-label">云端账号</span>
@@ -2490,7 +2818,8 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <div class="cloud-status">{{ authStatusMessage }}</div>
+                <div class="cloud-status" :class="{ 'cloud-status-error': isAuthError }">{{ authStatusMessage }}</div>
+
       </div>
     </div>
   </div>
@@ -2546,15 +2875,39 @@ onUnmounted(() => {
         <button class="admin-users-refresh" :disabled="isAdminUsersLoading" @click="openAdminUsersPanel">刷新</button>
       </div>
 
-      <div class="admin-users-content">
+            <div class="admin-users-content">
+        <!-- 搜索/排序/总数工具栏 -->
+        <div class="admin-users-toolbar">
+          <div class="admin-users-total">总用户数：<strong>{{ adminUsers.length }}</strong></div>
+          <div class="admin-users-controls">
+            <input
+              v-model="adminSearchQuery"
+              class="admin-users-search-input"
+              type="text"
+              placeholder="搜索用户账号..."
+              @input="onAdminSearchInput"
+            />
+            <select v-model="adminSortBy" class="admin-users-sort-select" @change="onAdminSortChange">
+              <option value="registeredAt">按注册时间</option>
+              <option value="lastActive">按最后活跃</option>
+            </select>
+          </div>
+        </div>
+
         <div v-if="isAdminUsersLoading" class="admin-users-state">正在加载后端用户数据...</div>
         <div v-else-if="adminUsersError" class="admin-users-state error">{{ adminUsersError }}</div>
-        <div v-else-if="adminUsers.length === 0" class="admin-users-state">暂无用户数据</div>
-        <div v-else class="admin-users-list">
-          <article v-for="user in adminUsers" :key="user.username" class="admin-user-card">
+        <div v-else-if="adminUsers.length === 0" class="admin-users-state">
+                  {{ '暂无用户数据' }}
+                </div>
+                <div v-else-if="displayedAdminUsers.length === 0 && adminSearchQuery.trim()" class="admin-users-state">
+                  没有找到匹配的用户
+                </div>
+                <div v-else class="admin-users-list">
+                            <article v-for="user in displayedAdminUsers" :key="user.username" class="admin-user-card">
             <div class="admin-user-card-header">
               <strong>{{ user.username }}</strong>
               <span>{{ user.nickname || '未设置昵称' }}</span>
+              <span v-if="user.isAdmin" class="admin-badge">管理员</span>
             </div>
             <div class="admin-user-grid">
               <div><span>今日代码</span><strong>{{ user.todayCodeLines || 0 }}</strong></div>
@@ -2564,7 +2917,52 @@ onUnmounted(() => {
             </div>
             <div class="admin-user-meta">注册时间：{{ formatAdminDate(user.registeredAt) }}</div>
             <div class="admin-user-meta">最近同步：{{ formatAdminDate(user.lastSyncTime) }}</div>
+                        <div class="admin-user-actions">
+              <button
+                class="admin-action-btn reset-pwd-btn"
+                :disabled="isAdminActing"
+                @click="openResetPasswordDialog(user.username)"
+              >重置密码</button>
+              <button
+                v-if="!user.isAdmin"
+                class="admin-action-btn delete-btn"
+                :disabled="isAdminActing"
+                @click="confirmDeleteUser(user.username)"
+              >删除</button>
+            </div>
           </article>
+
+          <!-- 重置密码弹窗 -->
+          <div v-if="showResetPwdDialog" class="admin-dialog-mask" @click.self="closeResetPasswordDialog">
+            <div class="admin-dialog">
+              <h3>重置 {{ resetPwdUsername }} 的密码</h3>
+              <input
+                v-model="resetPwdNewPassword"
+                class="cloud-input"
+                type="password"
+                placeholder="新密码（至少 6 位）"
+              />
+              <div class="admin-dialog-actions">
+                <button class="cloud-btn secondary" @click="closeResetPasswordDialog">取消</button>
+                <button class="cloud-btn primary" :disabled="!resetPwdNewPassword || resetPwdNewPassword.length < 6 || isAdminActing" @click="handleResetPassword">确认重置</button>
+              </div>
+              <div v-if="adminActionMessage" class="admin-action-msg">{{ adminActionMessage }}</div>
+            </div>
+          </div>
+
+          <!-- 删除确认弹窗 -->
+          <div v-if="showDeleteConfirm" class="admin-dialog-mask" @click.self="cancelDeleteUser">
+            <div class="admin-dialog">
+              <h3>确认删除用户</h3>
+              <p>确定要删除用户 <strong>{{ deleteTargetUsername }}</strong> 吗？</p>
+              <p class="admin-dialog-warn">此操作不可撤销，该用户的所有数据将被永久删除。</p>
+              <div class="admin-dialog-actions">
+                <button class="cloud-btn secondary" @click="cancelDeleteUser">取消</button>
+                <button class="cloud-btn danger" :disabled="isAdminActing" @click="handleDeleteUser">确认删除</button>
+              </div>
+              <div v-if="adminActionMessage" class="admin-action-msg">{{ adminActionMessage }}</div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -3025,7 +3423,8 @@ onUnmounted(() => {
 .cloud-btn.primary { background: #4f8f5f; }
 .cloud-btn.secondary { background: #5b87b4; }
 .cloud-btn.danger { background: #b75b54; }
-.cloud-status { margin-top: 10px; padding: 8px; border-left: 3px solid #7ea56d; border-radius: 6px; background: rgba(239, 244, 229, 0.86); color: #4d5a45; font-size: 12px; line-height: 1.4; }
+.cloud-status { margin-top: 10px; padding: 8px; border-left: 3px solid #7ea56d; border-radius: 6px; background: rgba(239, 244, 229, 0.86); color: #4d5a45; font-size: 12px; line-height: 1.4; transition: all 0.2s ease; }
+.cloud-status-error { border-left-color: #c0392b !important; background: rgba(250, 235, 235, 0.92) !important; color: #a93226 !important; font-weight: 500; }
 
 /* ========== 设置面板样式 ========== */
 .settings-mask {
@@ -3407,6 +3806,70 @@ onUnmounted(() => {
   opacity: 0.55;
 }
 
+.admin-users-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 0 14px 0;
+  flex-wrap: wrap;
+}
+
+.admin-users-total {
+  color: #3f6d4a;
+  font-size: 14px;
+  white-space: nowrap;
+}
+
+.admin-users-total strong {
+  font-size: 18px;
+  color: #2e7d32;
+}
+
+.admin-users-controls {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.admin-users-search-input {
+  padding: 7px 12px;
+  border: 1px solid rgba(87, 124, 87, 0.3);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.85);
+  color: #344235;
+  font-size: 13px;
+  outline: none;
+  width: 180px;
+  transition: border-color 0.2s;
+}
+
+.admin-users-search-input:focus {
+  border-color: rgba(79, 143, 95, 0.6);
+  background: rgba(255, 255, 255, 1);
+}
+
+.admin-users-search-input::placeholder {
+  color: #8a9e85;
+}
+
+.admin-users-sort-select {
+  padding: 7px 10px;
+  border: 1px solid rgba(87, 124, 87, 0.3);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.85);
+  color: #344235;
+  font-size: 13px;
+  outline: none;
+  cursor: pointer;
+  transition: border-color 0.2s;
+}
+
+.admin-users-sort-select:focus {
+  border-color: rgba(79, 143, 95, 0.6);
+  background: rgba(255, 255, 255, 1);
+}
+
 .admin-users-content {
   flex: 1;
   overflow-y: auto;
@@ -3479,6 +3942,110 @@ onUnmounted(() => {
 
 .admin-user-meta + .admin-user-meta {
   margin-top: 4px;
+}
+
+.admin-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: #3f6d4a;
+  color: #fff !important;
+  font-size: 11px !important;
+  font-weight: 600;
+}
+
+.admin-user-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+
+.admin-action-btn {
+  padding: 5px 12px;
+  border: none;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+
+.admin-action-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.promote-btn {
+  background: #4a7c5c;
+  color: #fff;
+}
+
+.demote-btn {
+  background: #b8860b;
+  color: #fff;
+}
+
+.reset-pwd-btn {
+  background: #5b7fa5;
+  color: #fff;
+}
+
+.delete-btn {
+  background: #b75b54;
+  color: #fff;
+}
+
+.admin-dialog-mask {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.35);
+  z-index: 10;
+  border-radius: 10px;
+}
+
+.admin-dialog {
+  background: #fff;
+  border-radius: 12px;
+  padding: 24px;
+  width: min(360px, 80vw);
+  box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+}
+
+.admin-dialog h3 {
+  margin: 0 0 16px;
+  color: #3f4a38;
+  font-size: 16px;
+}
+
+.admin-dialog p {
+  margin: 0 0 12px;
+  color: #4a5a44;
+  font-size: 14px;
+}
+
+.admin-dialog-warn {
+  color: #b75b54 !important;
+  font-size: 13px !important;
+}
+
+.admin-dialog-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 16px;
+  justify-content: flex-end;
+}
+
+.admin-action-msg {
+  margin-top: 12px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: #e8f5e9;
+  color: #2e7d32;
+  font-size: 13px;
+  text-align: center;
 }
 
 .pet-container {
@@ -4709,6 +5276,175 @@ onUnmounted(() => {
 
 /* 5. 拖拽悬空 */
 /* 主页面不再使用 cat-lifted 视觉效果；悬浮窗仍可使用消息文案 */
+
+/* ==========================================
+   🌟 新用户引导 (Onboarding)
+   ========================================== */
+.onboarding-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 99999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(30, 40, 25, 0.65);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  pointer-events: auto;
+  animation: onboardingFadeIn 0.4s ease;
+}
+
+@keyframes onboardingFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.onboarding-panel {
+  width: min(480px, 88vw);
+  max-height: 80vh;
+  padding: 36px 32px 28px;
+  border: 2px solid rgba(134, 212, 152, 0.35);
+  border-radius: 20px;
+  background: linear-gradient(160deg, #f7fcf4, #edf5e6);
+  box-shadow: 0 24px 64px rgba(20, 35, 18, 0.4);
+  color: #334331;
+  text-align: center;
+  position: relative;
+  overflow-y: auto;
+  animation: onboardingSlideUp 0.35s ease;
+}
+
+@keyframes onboardingSlideUp {
+  from {
+    opacity: 0;
+    transform: translateY(30px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.onboarding-step-indicator {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+
+.onboarding-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: rgba(87, 124, 87, 0.25);
+  transition: all 0.3s ease;
+}
+
+.onboarding-dot.active {
+  width: 22px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #6aaf6a, #4f8f5f);
+  box-shadow: 0 0 8px rgba(79, 143, 95, 0.45);
+}
+
+.onboarding-icon-row {
+  font-size: 52px;
+  margin-bottom: 8px;
+  line-height: 1.2;
+}
+
+.onboarding-title {
+  margin: 0 0 12px;
+  color: #315c3b;
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.onboarding-content {
+  margin: 0 0 22px;
+  padding: 16px 18px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.55);
+  border: 1px solid rgba(87, 124, 87, 0.12);
+  text-align: left;
+}
+
+.onboarding-content p {
+  margin: 0;
+  color: #3f4a38;
+  font-size: 14px;
+  line-height: 1.75;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.onboarding-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.onboarding-nav {
+  display: flex;
+  gap: 10px;
+}
+
+.onboarding-btn {
+  padding: 10px 18px;
+  border: 1px solid rgba(87, 124, 87, 0.3);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.75);
+  color: #4a5a44;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+.onboarding-btn:hover {
+  background: rgba(255, 255, 255, 0.95);
+  border-color: rgba(87, 124, 87, 0.5);
+  transform: translateY(-1px);
+}
+
+.onboarding-btn:active {
+  transform: translateY(0);
+}
+
+.onboarding-skip {
+  background: transparent;
+  border-color: transparent;
+  color: #7b8f7b;
+}
+
+.onboarding-skip:hover {
+  background: rgba(87, 124, 87, 0.08);
+  border-color: rgba(87, 124, 87, 0.2);
+  color: #4a5a44;
+}
+
+.onboarding-next {
+  background: linear-gradient(135deg, #5fa86f, #4f8f5f);
+  border-color: #4f8f5f;
+  color: white;
+}
+
+.onboarding-next:hover {
+  background: linear-gradient(135deg, #6fbf7f, #5f9f6f);
+  border-color: #5f9f6f;
+  color: white;
+}
+
+.onboarding-step-text {
+  margin-top: 14px;
+  color: #8a9e85;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 1px;
+}
 </style>
 
 <style>
