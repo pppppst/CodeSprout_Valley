@@ -246,12 +246,14 @@ function applyCloudSave(save) {
   // 读取云端的植物状态，强制覆盖前端默认值（认后端为爹）。
   // 注意：因为 currentPlantStage 是一个根据浇水次数 (plantWaterByTerm) 计算得出的 computed 属性，
   // 我们需要反向计算出对应的浇水次数并覆盖当前节气的状态。
-  // 注意不要使用 Math.max 避免跨节气清零失败被本地数值反盖。
+  // 使用 Math.max 保护本地已累计的浇水次数不被服务端阶段号反向推算值低覆盖。
+  // 跨节气时会自动归零，因为新节气的本地计数和云端推算值都是 0。
   if (save.plantStage !== undefined && currentTermPinyin.value) {
     const requiredWaterings = getMinimumWateringsForPlantStage(save.plantStage)
+    const currentWaterings = plantWaterByTerm.value[currentTermPinyin.value] || 0
     plantWaterByTerm.value = {
       ...plantWaterByTerm.value,
-      [currentTermPinyin.value]: requiredWaterings
+      [currentTermPinyin.value]: Math.max(currentWaterings, requiredWaterings)
     }
   }
 
@@ -784,7 +786,7 @@ const onboardingSteps = [
   {
     title: '💧 浇灌你的植物',
     icon: '🌱',
-    content: '消耗 20 水滴即可给当前节气的植物浇水一次。\n\n植物分为 4 个成长阶段：\n🌱 阶段 1：初始积累（浇水 0 次）\n🌿 阶段 2：稳定发芽（浇水 30 次）\n🌳 阶段 3：茁壮成长（浇水 60 次）\n🌸 阶段 4：繁花盛开（浇水 120 次）\n\n每个节气独立计数，新节气开始植物会从小苗重新生长。'
+    content: '消耗 20 水滴即可给当前节气的植物浇水一次。\n\n植物分为 4 个成长阶段：\n🌱 阶段 1：初始积累（浇水 0 次）\n🌿 阶段 2：稳定发芽（浇水 10 次）\n🌳 阶段 3：茁壮成长（浇水 30 次）\n🌸 阶段 4：繁花盛开（浇水 60 次）\n\n每个节气独立计数，新节气开始植物会从小苗重新生长。'
   },
   {
     title: '📖 节气档案与图鉴',

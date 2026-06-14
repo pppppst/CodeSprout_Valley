@@ -1,4 +1,4 @@
-export const USER_PLANT_STAGE_THRESHOLDS = [0, 30, 60, 120]
+export const USER_PLANT_STAGE_THRESHOLDS = [0, 10, 30, 60]
 export const ADMIN_PLANT_STAGE_THRESHOLDS = [0, 1, 2, 3]
 
 export function getPlantStageThresholds(role = 'user') {
